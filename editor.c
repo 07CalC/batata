@@ -38,6 +38,7 @@ struct erow {
 struct editor {
   int cx, cy;
   int rowoff;
+  int coloff;
   int rows;
   int cols;
   int numrows;
@@ -235,6 +236,10 @@ void scroll() {
   if (E.cy >= E.rowoff + E.rows) {
     E.rowoff = E.cy - E.rows + 1;
   }
+  if (E.cx < E.coloff)
+    E.coloff = E.cx;
+  if (E.cx >= E.coloff + E.cols)
+    E.coloff = E.cx - E.cols + 1;
 }
 
 void drawrows(struct abuf *ab) {
@@ -263,10 +268,12 @@ void drawrows(struct abuf *ab) {
         abAdd(ab, "~", 1);
       }
     } else {
-      int len = E.row[filerow].size;
+      int len = E.row[filerow].size - E.coloff;
+      if (len < 0)
+        len = 0;
       if (len > E.cols)
         len = E.cols;
-      abAdd(ab, E.row[filerow].line, len);
+      abAdd(ab, &E.row[filerow].line[E.coloff], len);
     }
 
     abAdd(ab, "\x1b[k", 3);
@@ -287,7 +294,8 @@ void clearscreen() {
   drawrows(&ab);
 
   char buf[32];
-  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1,
+           E.cx - E.coloff + 1);
   abAdd(&ab, buf, strlen(buf));
 
   abAdd(&ab, "\x1b[?25h", 6);
@@ -297,13 +305,18 @@ void clearscreen() {
 }
 
 void movecursor(int key) {
+  struct erow *row = (E.cy >= E.rows) ? NULL : &E.row[E.cy];
   switch (key) {
   case ARROW_LEFT:
     if (E.cx != 0)
       E.cx--;
+    else if (E.cy > 0) {
+      E.cy--;
+      E.cx = E.row[E.cy].size;
+    }
     break;
   case ARROW_DOWN:
-    if (E.cy != E.numrows)
+    if (E.cy < E.numrows)
       E.cy++;
     break;
   case ARROW_UP:
@@ -311,10 +324,19 @@ void movecursor(int key) {
       E.cy--;
     break;
   case ARROW_RIGHT:
-    if (E.cx != E.cols - 1)
+    if (row && E.cx < row->size)
       E.cx++;
+    else if (row && E.cx == row->size) {
+      E.cy++;
+      E.cx = 0;
+    }
     break;
   }
+
+  row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
+  int rowlen = row ? row->size : 0;
+  if (E.cx > rowlen)
+    E.cx = rowlen;
 }
 
 void processkey() {
@@ -353,6 +375,7 @@ void geteditor() {
   E.cx = 0;
   E.cy = 0;
   E.rowoff = 0;
+  E.coloff = 0;
   E.numrows = 0;
   E.row = NULL;
   if (windowsize(&E.rows, &E.cols) == -1)

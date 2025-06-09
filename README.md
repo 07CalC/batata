@@ -7,7 +7,7 @@
 ## ✨ Features
 
 - Basic text editing (type, delete, move around)
-- Open/save `.txt` files
+- Open/save any files
 - Raw terminal input handling (arrow keys, Ctrl combos)
 - Simple status bar + screen refresh logic
 
@@ -22,3 +22,6 @@ git clone https://github.com/yourusername/batata.git
 cd batata
 make
 ./batata [filename]
+```
+HUGE WIP
+Can only open and view the files currently, have fun moving aroound

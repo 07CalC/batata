@@ -1,11 +1,17 @@
+#define _DEFAULT_SOURCE
+#define _BSD_SOURCE
+#define _GNU_SOURCE
+
 #include <asm-generic/errno-base.h>
 #include <asm-generic/ioctls.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -24,10 +30,17 @@ enum keys {
   DEL
 };
 
+struct erow {
+  int size;
+  char *line;
+};
+
 struct editor {
   int cx, cy;
   int rows;
   int cols;
+  int numrows;
+  struct erow row;
   struct termios og;
 };
 
@@ -167,6 +180,30 @@ int windowsize(int *rows, int *cols) {
   }
 }
 
+void editorOpen(char *filename) {
+  FILE *fp = fopen(filename, "r");
+  if (!fp)
+    kill("fopen");
+
+  char *line = NULL;
+  size_t linecap = 0;
+  ssize_t linelen;
+  linelen = getline(&line, &linecap, fp);
+  if (linelen != -1) {
+    while (linelen > 0 &&
+           (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
+      linelen--;
+
+    E.row.size = linelen;
+    E.row.line = malloc(linelen + 1);
+    memcpy(E.row.line, line, linelen);
+    E.row.line[linelen] = '\0';
+    E.numrows++;
+  }
+  free(line);
+  fclose(fp);
+}
+
 struct abuf {
   char *b;
   int len;
@@ -188,25 +225,33 @@ void abFree(struct abuf *ab) { free(ab->b); }
 
 void drawrows(struct abuf *ab) {
   for (int y = 0; y < E.rows; y++) {
-    if (y == E.rows / 3) {
-      char message[80];
-      int messagelen = snprintf(message, sizeof(message),
-                                "Batata editor -- version %s", editor_version);
-      if (messagelen > E.cols)
-        messagelen = E.cols;
+    if (y >= E.numrows) {
+      if (y == E.rows / 3 && E.numrows == 0) {
+        char message[80];
+        int messagelen =
+            snprintf(message, sizeof(message), "Batata editor -- version %s",
+                     editor_version);
+        if (messagelen > E.cols)
+          messagelen = E.cols;
 
-      int padding = (E.cols - messagelen) / 2;
-      if (padding < 0)
-        padding = 0;
-      if (padding) {
+        int padding = (E.cols - messagelen) / 2;
+        if (padding < 0)
+          padding = 0;
+        if (padding) {
+          abAdd(ab, "~", 1);
+          padding--;
+        }
+        while (padding--)
+          abAdd(ab, " ", 1);
+        abAdd(ab, message, messagelen);
+      } else {
         abAdd(ab, "~", 1);
-        padding--;
       }
-      while (padding--)
-        abAdd(ab, " ", 1);
-      abAdd(ab, message, messagelen);
     } else {
-      abAdd(ab, "~", 1);
+      int len = E.row.size;
+      if (len > E.cols)
+        len = E.cols;
+      abAdd(ab, E.row.line, len);
     }
 
     abAdd(ab, "\x1b[k", 3);
@@ -286,22 +331,26 @@ void processkey() {
     movecursor(c);
     break;
   }
-  clearscreen();
 }
 
 void geteditor() {
   E.cx = 0;
   E.cy = 0;
+  E.numrows = 0;
   if (windowsize(&E.rows, &E.cols) == -1)
     kill("GetWindowSize");
 }
 
-int main() {
+int main(int argc, char *argv[]) {
   rawmode();
   geteditor();
-  clearscreen();
+  if (argc >= 2) {
+    editorOpen(argv[1]);
+  }
+
   char c;
   while (1) {
+    clearscreen();
     processkey();
   }
 

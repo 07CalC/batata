@@ -4,8 +4,8 @@
 
 #include <asm-generic/errno-base.h>
 #include <asm-generic/ioctls.h>
-#include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +13,7 @@
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #define CTRL_KEY(k) ((k) & 0x1f)
@@ -47,6 +48,9 @@ struct editor {
   int cols;
   int numrows;
   struct erow *row;
+  char *filename;
+  char status[80];
+  time_t statusmsg_time;
   struct termios og;
 };
 
@@ -236,6 +240,8 @@ void editorAddRow(char *s, size_t len) {
 }
 
 void editorOpen(char *filename) {
+  free(E.filename);
+  E.filename = strdup(filename);
   FILE *fp = fopen(filename, "r");
   if (!fp)
     kill("fopen");
@@ -322,10 +328,47 @@ void drawrows(struct abuf *ab) {
     }
 
     abAdd(ab, "\x1b[K", 3);
-    if (y < E.rows - 1) {
-      abAdd(ab, "\r\n", 2);
+    abAdd(ab, "\r\n", 2);
+  }
+}
+
+void DrawStatusBar(struct abuf *ab) {
+  abAdd(ab, "\x1b[7m", 4);
+  char status[80], rstatus[80];
+  int len = snprintf(status, sizeof(status), "%.20s - %d lines",
+                     E.filename ? E.filename : "[No file]", E.numrows);
+  int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
+  if (len > E.cols)
+    len = E.cols;
+  abAdd(ab, status, len);
+  while (len < E.cols) {
+    if (E.cols - len == rlen) {
+      abAdd(ab, rstatus, rlen);
+      break;
+    } else {
+      abAdd(ab, " ", 1);
+      len++;
     }
   }
+  abAdd(ab, "\x1b[m", 3);
+  abAdd(ab, "\r\n", 2);
+}
+
+void DrawMessageBar(struct abuf *ab) {
+  abAdd(ab, "\x1b[K", 3);
+  int msglen = strlen(E.status);
+  if (msglen > E.cols)
+    msglen = E.cols;
+  if (msglen && time(NULL) - E.statusmsg_time < 5)
+    abAdd(ab, E.status, msglen);
+}
+
+void setstatus(const char *format, ...) {
+  va_list arglist;
+  va_start(arglist, format);
+  vsnprintf(E.status, sizeof(E.status), format, arglist);
+  va_end(arglist);
+  E.statusmsg_time = time(NULL);
 }
 
 void clearscreen() {
@@ -337,6 +380,8 @@ void clearscreen() {
   abAdd(&ab, "\x1b[2J", 4);
 
   drawrows(&ab);
+  DrawStatusBar(&ab);
+  DrawMessageBar(&ab);
 
   char buf[32];
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1,
@@ -409,10 +454,12 @@ void processkey() {
   } break;
 
   case HOME:
+    E.cx = 0;
+    break;
+
   case END: {
-    int times = E.cols;
-    while (times--)
-      movecursor(c == HOME ? ARROW_LEFT : ARROW_RIGHT);
+    if (E.cy < E.numrows)
+      E.cx = E.row[E.cy].size;
   } break;
 
   case ARROW_LEFT:
@@ -432,8 +479,12 @@ void geteditor() {
   E.coloff = 0;
   E.numrows = 0;
   E.row = NULL;
+  E.filename = NULL;
+  E.status[0] = '\0';
+  E.statusmsg_time = 0;
   if (windowsize(&E.rows, &E.cols) == -1)
     kill("GetWindowSize");
+  E.rows -= 2;
 }
 
 int main(int argc, char *argv[]) {
@@ -442,6 +493,8 @@ int main(int argc, char *argv[]) {
   if (argc >= 2) {
     editorOpen(argv[1]);
   }
+
+  setstatus("TIP: Ctrl-Q to quit");
 
   while (1) {
     clearscreen();

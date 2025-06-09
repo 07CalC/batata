@@ -17,6 +17,7 @@
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define editor_version "0.0.1"
+#define TAB_LENGTH 4
 
 enum keys {
   ARROW_LEFT = 1000,
@@ -32,11 +33,14 @@ enum keys {
 
 struct erow {
   int size;
+  int rsize;
   char *line;
+  char *render;
 };
 
 struct editor {
   int cx, cy;
+  int rx;
   int rowoff;
   int coloff;
   int rows;
@@ -182,6 +186,40 @@ int windowsize(int *rows, int *cols) {
   }
 }
 
+int cxtorx(struct erow *row, int cx) {
+  int rx = 0;
+  for (int i = 0; i < cx; i++) {
+    if (row->line[i] == '\t')
+      rx += (TAB_LENGTH - 1) - (rx % TAB_LENGTH);
+    rx++;
+  }
+  return rx;
+}
+
+void updaterow(struct erow *row) {
+  int tabs = 0;
+  int j;
+  for (j = 0; j < row->size; j++)
+    if (row->line[j] == '\t')
+      tabs++;
+
+  free(row->render);
+  row->render = malloc(row->size + tabs * (TAB_LENGTH - 1) + 1);
+
+  int idx = 0;
+  for (j = 0; j < row->size; j++) {
+    if (row->line[j] == '\t') {
+      row->render[idx++] = ' ';
+      while (idx % TAB_LENGTH != 0)
+        row->render[idx++] = ' ';
+    } else {
+      row->render[idx++] = row->line[j];
+    }
+  }
+  row->render[idx] = '\0';
+  row->rsize = idx;
+}
+
 void editorAddRow(char *s, size_t len) {
   E.row = realloc(E.row, sizeof(struct erow) * (E.numrows + 1));
 
@@ -190,6 +228,10 @@ void editorAddRow(char *s, size_t len) {
   E.row[at].line = malloc(len + 1);
   memcpy(E.row[at].line, s, len);
   E.row[at].line[len] = '\0';
+
+  E.row[at].rsize = 0;
+  E.row[at].render = NULL;
+  updaterow(&E.row[at]);
   E.numrows++;
 }
 
@@ -231,15 +273,18 @@ void abAdd(struct abuf *ab, const char *s, int len) {
 void abFree(struct abuf *ab) { free(ab->b); }
 
 void scroll() {
+  E.rx = 0;
+  if (E.cy < E.numrows)
+    E.rx = cxtorx(&E.row[E.cy], E.cx);
   if (E.cy < E.rowoff)
     E.rowoff = E.cy;
   if (E.cy >= E.rowoff + E.rows) {
     E.rowoff = E.cy - E.rows + 1;
   }
-  if (E.cx < E.coloff)
-    E.coloff = E.cx;
-  if (E.cx >= E.coloff + E.cols)
-    E.coloff = E.cx - E.cols + 1;
+  if (E.rx < E.coloff)
+    E.coloff = E.rx;
+  if (E.rx >= E.coloff + E.cols)
+    E.coloff = E.rx - E.cols + 1;
 }
 
 void drawrows(struct abuf *ab) {
@@ -268,15 +313,15 @@ void drawrows(struct abuf *ab) {
         abAdd(ab, "~", 1);
       }
     } else {
-      int len = E.row[filerow].size - E.coloff;
+      int len = E.row[filerow].rsize - E.coloff;
       if (len < 0)
         len = 0;
       if (len > E.cols)
         len = E.cols;
-      abAdd(ab, &E.row[filerow].line[E.coloff], len);
+      abAdd(ab, &E.row[filerow].render[E.coloff], len);
     }
 
-    abAdd(ab, "\x1b[k", 3);
+    abAdd(ab, "\x1b[K", 3);
     if (y < E.rows - 1) {
       abAdd(ab, "\r\n", 2);
     }
@@ -295,7 +340,7 @@ void clearscreen() {
 
   char buf[32];
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1,
-           E.cx - E.coloff + 1);
+           E.rx - E.coloff + 1);
   abAdd(&ab, buf, strlen(buf));
 
   abAdd(&ab, "\x1b[?25h", 6);
@@ -350,6 +395,14 @@ void processkey() {
 
   case PG_UP:
   case PG_DN: {
+    if (c == PG_UP)
+      E.cy = E.rowoff;
+    else if (c == PG_DN) {
+      E.cy = E.rowoff + E.rows - 1;
+      if (E.cy > E.numrows)
+        E.cy = E.numrows;
+    }
+
     int times = E.rows;
     while (times--)
       movecursor(c == PG_UP ? ARROW_UP : ARROW_DOWN);
@@ -374,6 +427,7 @@ void processkey() {
 void geteditor() {
   E.cx = 0;
   E.cy = 0;
+  E.rx = 0;
   E.rowoff = 0;
   E.coloff = 0;
   E.numrows = 0;
@@ -389,7 +443,6 @@ int main(int argc, char *argv[]) {
     editorOpen(argv[1]);
   }
 
-  char c;
   while (1) {
     clearscreen();
     processkey();

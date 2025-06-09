@@ -12,6 +12,18 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define editor_version "0.0.1"
 
+enum keys {
+  ARROW_LEFT = 1000,
+  ARROW_RIGHT,
+  ARROW_UP,
+  ARROW_DOWN,
+  PG_UP,
+  PG_DN,
+  HOME,
+  END,
+  DEL
+};
+
 struct editor {
   int cx, cy;
   int rows;
@@ -53,14 +65,72 @@ void rawmode() {
   }
 }
 
-char readkey() {
+int readkey() {
   int n;
   char c;
   while ((n = read(STDIN_FILENO, &c, 1)) != 1) {
     if (n == -1 && errno == EAGAIN)
       kill("read");
   }
-  return c;
+
+  if (c == '\x1b') {
+    char sq[3];
+
+    if (read(STDIN_FILENO, &sq[0], 1) != 1)
+      return '\x1b';
+    if (read(STDIN_FILENO, &sq[1], 1) != 1)
+      return '\x1b';
+
+    if (sq[0] == '[') {
+      if (sq[1] >= '0' && sq[1] <= '9') {
+        if (read(STDIN_FILENO, &sq[2], 1) != 1)
+          return '\x1b';
+        if (sq[2] == '~') {
+          switch (sq[1]) {
+          case '1':
+            return HOME;
+          case '3':
+            return DEL;
+          case '4':
+            return END;
+          case '5':
+            return PG_UP;
+          case '6':
+            return PG_DN;
+          case '7':
+            return HOME;
+          case '8':
+            return END;
+          }
+        }
+      } else {
+        switch (sq[1]) {
+        case 'A':
+          return ARROW_UP;
+        case 'B':
+          return ARROW_DOWN;
+        case 'C':
+          return ARROW_RIGHT;
+        case 'D':
+          return ARROW_LEFT;
+        case 'H':
+          return HOME;
+        case 'F':
+          return END;
+        }
+      }
+    } else if (sq[0] == '0') {
+      switch (sq[1]) {
+      case 'H':
+        return HOME;
+      case 'F':
+        return END;
+      }
+    }
+    return '\x1b';
+  } else {
+    return c;
+  }
 }
 
 int cursorposition(int *rows, int *cols) {
@@ -159,20 +229,64 @@ void clearscreen() {
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
   abAdd(&ab, buf, strlen(buf));
 
-  abAdd(&ab, "\x1b[H", 3);
   abAdd(&ab, "\x1b[?25h", 6);
 
   write(STDOUT_FILENO, ab.b, ab.len);
   abFree(&ab);
 }
 
-void processkey() {
-  char c = readkey();
-  switch (c) {
-  case CTRL_KEY('q'):
-    exit(0);
+void movecursor(int key) {
+  switch (key) {
+  case ARROW_LEFT:
+    if (E.cx != 0)
+      E.cx--;
+    break;
+  case ARROW_DOWN:
+    if (E.cy != E.rows - 1)
+      E.cy++;
+    break;
+  case ARROW_UP:
+    if (E.cy != 0)
+      E.cy--;
+    break;
+  case ARROW_RIGHT:
+    if (E.cx != E.cols - 1)
+      E.cx++;
     break;
   }
+}
+
+void processkey() {
+  int c = readkey();
+  switch (c) {
+  case CTRL_KEY('q'):
+    write(STDOUT_FILENO, "\x1b[2j", 4);
+    write(STDOUT_FILENO, "\x1b[H", 3);
+    exit(0);
+    break;
+
+  case PG_UP:
+  case PG_DN: {
+    int times = E.rows;
+    while (times--)
+      movecursor(c == PG_UP ? ARROW_UP : ARROW_DOWN);
+  } break;
+
+  case HOME:
+  case END: {
+    int times = E.cols;
+    while (times--)
+      movecursor(c == HOME ? ARROW_LEFT : ARROW_RIGHT);
+  } break;
+
+  case ARROW_LEFT:
+  case ARROW_DOWN:
+  case ARROW_UP:
+  case ARROW_RIGHT:
+    movecursor(c);
+    break;
+  }
+  clearscreen();
 }
 
 void geteditor() {

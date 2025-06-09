@@ -37,10 +37,11 @@ struct erow {
 
 struct editor {
   int cx, cy;
+  int rowoff;
   int rows;
   int cols;
   int numrows;
-  struct erow row;
+  struct erow *row;
   struct termios og;
 };
 
@@ -180,6 +181,17 @@ int windowsize(int *rows, int *cols) {
   }
 }
 
+void editorAddRow(char *s, size_t len) {
+  E.row = realloc(E.row, sizeof(struct erow) * (E.numrows + 1));
+
+  int at = E.numrows;
+  E.row[at].size = len;
+  E.row[at].line = malloc(len + 1);
+  memcpy(E.row[at].line, s, len);
+  E.row[at].line[len] = '\0';
+  E.numrows++;
+}
+
 void editorOpen(char *filename) {
   FILE *fp = fopen(filename, "r");
   if (!fp)
@@ -188,17 +200,11 @@ void editorOpen(char *filename) {
   char *line = NULL;
   size_t linecap = 0;
   ssize_t linelen;
-  linelen = getline(&line, &linecap, fp);
-  if (linelen != -1) {
+  while ((linelen = getline(&line, &linecap, fp)) != -1) {
     while (linelen > 0 &&
            (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
       linelen--;
-
-    E.row.size = linelen;
-    E.row.line = malloc(linelen + 1);
-    memcpy(E.row.line, line, linelen);
-    E.row.line[linelen] = '\0';
-    E.numrows++;
+    editorAddRow(line, linelen);
   }
   free(line);
   fclose(fp);
@@ -223,9 +229,18 @@ void abAdd(struct abuf *ab, const char *s, int len) {
 
 void abFree(struct abuf *ab) { free(ab->b); }
 
+void scroll() {
+  if (E.cy < E.rowoff)
+    E.rowoff = E.cy;
+  if (E.cy >= E.rowoff + E.rows) {
+    E.rowoff = E.cy - E.rows + 1;
+  }
+}
+
 void drawrows(struct abuf *ab) {
   for (int y = 0; y < E.rows; y++) {
-    if (y >= E.numrows) {
+    int filerow = y + E.rowoff;
+    if (filerow >= E.numrows) {
       if (y == E.rows / 3 && E.numrows == 0) {
         char message[80];
         int messagelen =
@@ -248,10 +263,10 @@ void drawrows(struct abuf *ab) {
         abAdd(ab, "~", 1);
       }
     } else {
-      int len = E.row.size;
+      int len = E.row[filerow].size;
       if (len > E.cols)
         len = E.cols;
-      abAdd(ab, E.row.line, len);
+      abAdd(ab, E.row[filerow].line, len);
     }
 
     abAdd(ab, "\x1b[k", 3);
@@ -262,6 +277,7 @@ void drawrows(struct abuf *ab) {
 }
 
 void clearscreen() {
+  scroll();
   struct abuf ab = ABUF_INIT;
 
   abAdd(&ab, "\x1b[?25l", 6);
@@ -287,7 +303,7 @@ void movecursor(int key) {
       E.cx--;
     break;
   case ARROW_DOWN:
-    if (E.cy != E.rows - 1)
+    if (E.cy != E.numrows)
       E.cy++;
     break;
   case ARROW_UP:
@@ -336,7 +352,9 @@ void processkey() {
 void geteditor() {
   E.cx = 0;
   E.cy = 0;
+  E.rowoff = 0;
   E.numrows = 0;
+  E.row = NULL;
   if (windowsize(&E.rows, &E.cols) == -1)
     kill("GetWindowSize");
 }

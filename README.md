@@ -18,7 +18,7 @@ That's it — no tabs, no mouse support, no fluff. Just a potato-simple editor.
 ## ⚙️ How to Build & Run
 
 ```bash
-git@github.com:Dragonslayer-9095/batata.git
+git clone https://github.com/Dragonslayer-9095/batata.git
 cd batata
 make
 ./batata [filename]

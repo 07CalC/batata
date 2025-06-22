@@ -24,4 +24,5 @@ make
 ./batata [filename]
 ```
 HUGE WIP
-Can only open and view the files currently, have fun moving aroound
+It is functionally completed now and can edit any file you want with I/O support
+I want to add a search feature and some basic syntax highlighting next

@@ -4,6 +4,7 @@
 
 #include <asm-generic/errno-base.h>
 #include <asm-generic/ioctls.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -60,6 +61,8 @@ struct editor {
 
 struct editor E;
 void setstatus(const char *format, ...);
+void clearscreen();
+char *editorprompt(char *prompt);
 
 void kill(const char *s) {
   write(STDOUT_FILENO, "\x1b[2J", 4);
@@ -229,10 +232,12 @@ void updaterow(struct erow *row) {
   row->rsize = idx;
 }
 
-void editorAddRow(char *s, size_t len) {
+void editorInsertRow(int at, char *s, size_t len) {
+  if (at < 0 || at > E.numrows)
+    return;
   E.row = realloc(E.row, sizeof(struct erow) * (E.numrows + 1));
+  memmove(&E.row[at + 1], &E.row[at], sizeof(struct erow) * (E.numrows - at));
 
-  int at = E.numrows;
   E.row[at].size = len;
   E.row[at].line = malloc(len + 1);
   memcpy(E.row[at].line, s, len);
@@ -259,6 +264,7 @@ void editorDelRow(int at) {
   E.numrows--;
   E.dirty = true;
 }
+
 void rowinsertchar(struct erow *row, int at, int c) {
   if (at < 0 || at > row->size)
     at = row->size;
@@ -281,9 +287,24 @@ void rowdeletechar(struct erow *row, int at) {
 
 void insertchar(int c) {
   if (E.cy == E.numrows)
-    editorAddRow("", 0);
+    editorInsertRow(E.numrows, "", 0);
   rowinsertchar(&E.row[E.cy], E.cx, c);
   E.cx++;
+}
+
+void insertnewline() {
+  if (E.cx == 0) {
+    editorInsertRow(E.cy, "", 0);
+  } else {
+    struct erow *row = &E.row[E.cy];
+    editorInsertRow(E.cy + 1, &row->line[E.cx], row->size - E.cx);
+    row = &E.row[E.cy];
+    row->size = E.cx;
+    row->line[row->size] = '\0';
+    updaterow(row);
+  }
+  E.cy++;
+  E.cx = 0;
 }
 
 void rowinsertstring(struct erow *row, char *s, size_t len) {
@@ -345,7 +366,7 @@ void editorOpen(char *filename) {
     while (linelen > 0 &&
            (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
       linelen--;
-    editorAddRow(line, linelen);
+    editorInsertRow(E.numrows, line, linelen);
   }
   E.dirty = false;
   free(line);
@@ -353,8 +374,13 @@ void editorOpen(char *filename) {
 }
 
 void save() {
-  if (E.filename == NULL)
-    return;
+  if (E.filename == NULL) {
+    E.filename = editorprompt("Save as: %s (press ESC to cancel) ");
+    if (E.filename == NULL) {
+      setstatus("Save Aborted");
+      return;
+    }
+  }
 
   int len;
   char *buf = rowstostring(&len);
@@ -489,6 +515,41 @@ void setstatus(const char *format, ...) {
   E.statusmsg_time = time(NULL);
 }
 
+char *editorprompt(char *prompt) {
+  size_t bufsize = 128;
+  char *buf = malloc(bufsize);
+
+  size_t buflen = 0;
+  buf[0] = '\0';
+
+  while (1) {
+    setstatus(prompt, buf);
+    clearscreen();
+
+    int c = readkey();
+    if (c == DEL || c == CTRL_KEY('h') || c == BACKSPACE) {
+      if (buflen != 0)
+        buf[--buflen] = '\0';
+    } else if (c == '\x1b') {
+      setstatus("");
+      free(buf);
+      return NULL;
+    } else if (c == '\r') {
+      if (buflen != 0) {
+        setstatus("");
+        return buf;
+      }
+    } else if (!iscntrl(c) && c < 128) {
+      if (buflen == bufsize - 1) {
+        bufsize += buflen / 2;
+        buf = realloc(buf, bufsize);
+      }
+      buf[buflen++] = c;
+      buf[buflen] = '\0';
+    }
+  }
+}
+
 void clearscreen() {
   scroll();
   struct abuf ab = ABUF_INIT;
@@ -551,6 +612,7 @@ void processkey() {
   int c = readkey();
   switch (c) {
   case '\r':
+    insertnewline();
     break;
 
   case CTRL_KEY('q'):

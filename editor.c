@@ -62,7 +62,7 @@ struct editor {
 struct editor E;
 void setstatus(const char *format, ...);
 void clearscreen();
-char *editorprompt(char *prompt);
+char *editorprompt(char *prompt, void (*callback)(char *, int));
 
 void kill(const char *s) {
   write(STDOUT_FILENO, "\x1b[2J", 4);
@@ -206,6 +206,18 @@ int cxtorx(struct erow *row, int cx) {
     rx++;
   }
   return rx;
+}
+
+int rxtocx(struct erow *row, int rx) {
+  int cx = 0, cur = 0;
+  for (; cx < row->size; cx++) {
+    if (row->line[cx] == '\t')
+      cur += (TAB_LENGTH - 1) - (cur % TAB_LENGTH);
+    cur++;
+    if (cur > rx)
+      return cx;
+  }
+  return cx;
 }
 
 void updaterow(struct erow *row) {
@@ -375,7 +387,7 @@ void editorOpen(char *filename) {
 
 void save() {
   if (E.filename == NULL) {
-    E.filename = editorprompt("Save as: %s (press ESC to cancel) ");
+    E.filename = editorprompt("Save as: %s (press ESC to cancel) ", NULL);
     if (E.filename == NULL) {
       setstatus("Save Aborted");
       return;
@@ -399,6 +411,39 @@ void save() {
   }
   free(buf);
   setstatus("I/O error: %s", strerror(errno));
+}
+
+void findCallback(char *query, int key) {
+  if (key == '\r' || key == '\x1b') {
+    return;
+  }
+  for (int i = 0; i < E.numrows; i++) {
+    struct erow *row = &E.row[i];
+    char *match = strstr(row->render, query);
+    if (match) {
+      E.cy = i;
+      E.cx = rxtocx(row, match - row->render);
+      E.rowoff = E.numrows;
+      break;
+    }
+  }
+}
+
+void find() {
+  int initcx = E.cx;
+  int initcy = E.cy;
+  int initcoloff = E.coloff;
+  int initrowoff = E.rowoff;
+
+  char *query = editorprompt("Search: %s (Esc to cancel)", findCallback);
+  if (query)
+    free(query);
+  else {
+    E.cx = initcx;
+    E.cy = initcy;
+    E.coloff = initcoloff;
+    E.rowoff = initrowoff;
+  }
 }
 
 struct abuf {
@@ -515,7 +560,7 @@ void setstatus(const char *format, ...) {
   E.statusmsg_time = time(NULL);
 }
 
-char *editorprompt(char *prompt) {
+char *editorprompt(char *prompt, void (*callback)(char *, int)) {
   size_t bufsize = 128;
   char *buf = malloc(bufsize);
 
@@ -532,11 +577,15 @@ char *editorprompt(char *prompt) {
         buf[--buflen] = '\0';
     } else if (c == '\x1b') {
       setstatus("");
+      if (callback)
+        callback(buf, c);
       free(buf);
       return NULL;
     } else if (c == '\r') {
       if (buflen != 0) {
         setstatus("");
+        if (callback)
+          callback(buf, c);
         return buf;
       }
     } else if (!iscntrl(c) && c < 128) {
@@ -547,6 +596,9 @@ char *editorprompt(char *prompt) {
       buf[buflen++] = c;
       buf[buflen] = '\0';
     }
+
+    if (callback)
+      callback(buf, c);
   }
 }
 
@@ -637,6 +689,10 @@ void processkey() {
     save();
     break;
 
+  case CTRL_KEY('f'):
+    find();
+    break;
+
   case PG_UP:
   case PG_DN: {
     if (c == PG_UP)
@@ -710,7 +766,7 @@ int main(int argc, char *argv[]) {
     editorOpen(argv[1]);
   }
 
-  setstatus("TIP: Ctrl-S to save | Ctrl-Q to quit");
+  setstatus("TIP: Ctrl-S to save | Ctrl-Q to quit | Ctrl-F to find");
 
   while (1) {
     clearscreen();

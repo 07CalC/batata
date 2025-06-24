@@ -414,14 +414,35 @@ void save() {
 }
 
 void findCallback(char *query, int key) {
+  static int last = -1;
+  static int dir = 1;
   if (key == '\r' || key == '\x1b') {
+    last = -1;
+    dir = 1;
     return;
+  } else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
+    dir = 1;
+  } else if (key == ARROW_LEFT || ARROW_UP) {
+    dir = -1;
+  } else {
+    last = -1;
+    dir = 1;
   }
+
+  if (last == -1)
+    dir = 1;
+  int cur = last;
   for (int i = 0; i < E.numrows; i++) {
-    struct erow *row = &E.row[i];
+    cur += dir;
+    if (cur == -1)
+      cur = E.numrows - 1;
+    else if (cur == E.numrows)
+      cur = 0;
+    struct erow *row = &E.row[cur];
     char *match = strstr(row->render, query);
     if (match) {
-      E.cy = i;
+      last = cur;
+      E.cy = cur;
       E.cx = rxtocx(row, match - row->render);
       E.rowoff = E.numrows;
       break;

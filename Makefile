@@ -1,5 +1,5 @@
-editor: editor.c
-	gcc editor.c -o editor -Wall -Wextra -pedantic -std=c99
+batata: batata.c
+	gcc batata.c -o batata -Wall -Wextra -pedantic -std=c99
 
 run:
-	./editor
+	./batata

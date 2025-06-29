@@ -36,11 +36,14 @@ enum keys {
   DEL
 };
 
+enum Highlight { NORMAL = 0, NUMBER };
+
 struct erow {
   int size;
   int rsize;
   char *line;
   char *render;
+  unsigned char *highlight;
 };
 
 struct editor {
@@ -198,6 +201,26 @@ int windowsize(int *rows, int *cols) {
   }
 }
 
+void updateSyntax(struct erow *row) {
+  row->highlight = realloc(row->highlight, row->size);
+  memset(row->highlight, NORMAL, row->size);
+
+  for (int i = 0; i < row->rsize; i++) {
+    if (isdigit(row->render[i])) {
+      row->highlight[i] = NUMBER;
+    }
+  }
+}
+
+int syntocolour(int hl) {
+  switch (hl) {
+  case NUMBER:
+    return 31;
+  default:
+    return 37;
+  }
+}
+
 int cxtorx(struct erow *row, int cx) {
   int rx = 0;
   for (int i = 0; i < cx; i++) {
@@ -242,6 +265,7 @@ void updaterow(struct erow *row) {
   }
   row->render[idx] = '\0';
   row->rsize = idx;
+  updateSyntax(row);
 }
 
 void editorInsertRow(int at, char *s, size_t len) {
@@ -257,6 +281,7 @@ void editorInsertRow(int at, char *s, size_t len) {
 
   E.row[at].rsize = 0;
   E.row[at].render = NULL;
+  E.row[at].highlight = NULL;
   updaterow(&E.row[at]);
   E.numrows++;
   E.dirty = true;
@@ -265,6 +290,7 @@ void editorInsertRow(int at, char *s, size_t len) {
 void editorFreeRow(struct erow *row) {
   free(row->render);
   free(row->line);
+  free(row->highlight);
 }
 
 void editorDelRow(int at) {
@@ -532,7 +558,29 @@ void drawrows(struct abuf *ab) {
         len = 0;
       if (len > E.cols)
         len = E.cols;
-      abAdd(ab, &E.row[filerow].render[E.coloff], len);
+
+      char *c = &E.row[filerow].render[E.coloff];
+      unsigned char *hl = &E.row[filerow].highlight[E.coloff];
+      int curColour = -1;
+      for (int j = 0; j < len; j++) {
+        if (hl[j] == NORMAL) {
+          if (curColour != -1) {
+            abAdd(ab, "\x1b[39m", 5);
+            curColour = -1;
+          }
+          abAdd(ab, &c[j], 1);
+        } else {
+          int colour = syntocolour(hl[j]);
+          if (curColour != colour) {
+            curColour = colour;
+            char buf[16];
+            int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", colour);
+            abAdd(ab, buf, clen);
+          }
+          abAdd(ab, &c[j], 1);
+        }
+      }
+      abAdd(ab, "\x1b[39m", 5);
     }
 
     abAdd(ab, "\x1b[K", 3);
@@ -647,7 +695,7 @@ void clearscreen() {
 }
 
 void movecursor(int key) {
-  struct erow *row = (E.cy >= E.rows) ? NULL : &E.row[E.cy];
+  struct erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
   switch (key) {
   case ARROW_LEFT:
     if (E.cx != 0)

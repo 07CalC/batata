@@ -36,7 +36,7 @@ enum keys {
   DEL
 };
 
-enum Highlight { NORMAL = 0, NUMBER };
+enum Highlight { NORMAL = 0, NUMBER, MATCH };
 
 struct erow {
   int size;
@@ -201,14 +201,21 @@ int windowsize(int *rows, int *cols) {
   }
 }
 
+int isSepator(int c) {
+  return isspace(c) || c == '\0' || strchr(",.()+=/*=~%<>[];", c) != NULL;
+}
+
 void updateSyntax(struct erow *row) {
   row->highlight = realloc(row->highlight, row->size);
   memset(row->highlight, NORMAL, row->size);
 
-  for (int i = 0; i < row->rsize; i++) {
-    if (isdigit(row->render[i])) {
+  int i = 0;
+  while (i < row->rsize) {
+    char c = row->render[i];
+    if (isdigit(c)) {
       row->highlight[i] = NUMBER;
     }
+    i++;
   }
 }
 
@@ -216,6 +223,8 @@ int syntocolour(int hl) {
   switch (hl) {
   case NUMBER:
     return 31;
+  case MATCH:
+    return 36;
   default:
     return 37;
   }
@@ -442,6 +451,14 @@ void save() {
 void findCallback(char *query, int key) {
   static int last = -1;
   static int dir = 1;
+  static int savedLine;
+  static char *savedHL = NULL;
+  if (savedHL) {
+    memcpy(E.row[savedLine].highlight, savedHL, E.row[savedLine].rsize);
+    free(savedHL);
+    savedHL = NULL;
+  }
+
   if (key == '\r' || key == '\x1b') {
     last = -1;
     dir = 1;
@@ -471,6 +488,11 @@ void findCallback(char *query, int key) {
       E.cy = cur;
       E.cx = rxtocx(row, match - row->render);
       E.rowoff = E.numrows;
+
+      savedLine = cur;
+      savedHL = malloc(row->rsize);
+      memcpy(savedHL, row->highlight, row->rsize);
+      memset(&row->highlight[match - row->render], MATCH, strlen(query));
       break;
     }
   }

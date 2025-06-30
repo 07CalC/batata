@@ -37,6 +37,12 @@ enum keys {
 };
 
 enum Highlight { NORMAL = 0, NUMBER, MATCH };
+#define HL_NUMBERS (1 << 0)
+struct syntax {
+  char *ftype;
+  char **fmatch;
+  int flags;
+};
 
 struct erow {
   int size;
@@ -60,9 +66,18 @@ struct editor {
   time_t statusmsg_time;
   struct termios og;
   bool dirty;
+  struct syntax *syntax;
 };
 
 struct editor E;
+
+char *C_EXTENSIONS[] = {".c", ".h", ".cpp", NULL};
+
+struct syntax HLDB[] = {
+    {"c", C_EXTENSIONS, HL_NUMBERS},
+};
+
+#define HLDB_SIZE (sizeof(HLDB) / sizeof(HLDB[0]))
 void setstatus(const char *format, ...);
 void clearscreen();
 char *editorprompt(char *prompt, void (*callback)(char *, int));
@@ -148,7 +163,7 @@ int readkey() {
         case 'D':
           return ARROW_LEFT;
         case 'H':
-          return HOME;
+
         case 'F':
           return END;
         }
@@ -201,20 +216,32 @@ int windowsize(int *rows, int *cols) {
   }
 }
 
-int isSepator(int c) {
+bool isSepator(int c) {
   return isspace(c) || c == '\0' || strchr(",.()+=/*=~%<>[];", c) != NULL;
 }
 
 void updateSyntax(struct erow *row) {
   row->highlight = realloc(row->highlight, row->size);
   memset(row->highlight, NORMAL, row->size);
+  if (E.syntax == NULL)
+    return;
+
+  bool prevSep = true;
 
   int i = 0;
   while (i < row->rsize) {
     char c = row->render[i];
-    if (isdigit(c)) {
-      row->highlight[i] = NUMBER;
+    unsigned char prevHL = (i > 0) ? row->highlight[i - 1] : NORMAL;
+    if (E.syntax->flags & HL_NUMBERS) {
+      if ((isdigit(c) && (prevSep || prevHL == NUMBER)) ||
+          (c == '.' && prevHL == NUMBER)) {
+        row->highlight[i] = NUMBER;
+        i++;
+        prevSep = false;
+        continue;
+      }
     }
+    prevSep = isSepator(c);
     i++;
   }
 }
@@ -227,6 +254,27 @@ int syntocolour(int hl) {
     return 36;
   default:
     return 37;
+  }
+}
+
+void selectHL() {
+  E.syntax = NULL;
+  if (E.filename == NULL)
+    return;
+
+  char *ex = strchr(E.filename, '.');
+  for (int j = 0; j < (HLDB_SIZE); j++) {
+    struct syntax *s = &HLDB[j];
+    int i = 0;
+    while (s->fmatch[i]) {
+      bool verified = (s->fmatch[i][0] == '.');
+      if ((verified && ex && !strcmp(ex, s->fmatch[i])) ||
+          (!verified && strstr(E.filename, s->fmatch[i]))) {
+        E.syntax = s;
+        return;
+      }
+      i++;
+    }
   }
 }
 
@@ -617,7 +665,9 @@ void DrawStatusBar(struct abuf *ab) {
   int len = snprintf(status, sizeof(status), "%.20s - %d lines %s",
                      E.filename ? E.filename : "[No Name]", E.numrows,
                      E.dirty ? "(modified)" : "");
-  int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
+  int rlen =
+      snprintf(rstatus, sizeof(rstatus), "%s | %d/%d",
+               E.syntax ? E.syntax->ftype : "no filetype", E.cy + 1, E.numrows);
   if (len > E.cols)
     len = E.cols;
   abAdd(ab, status, len);
@@ -845,6 +895,7 @@ void geteditor() {
   E.status[0] = '\0';
   E.statusmsg_time = 0;
   E.dirty = false;
+  E.syntax = NULL;
   if (windowsize(&E.rows, &E.cols) == -1)
     kill("GetWindowSize");
   E.rows -= 2;

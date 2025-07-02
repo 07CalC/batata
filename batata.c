@@ -26,6 +26,7 @@
 // Defaults to be ovverwritten by .batatarc
 int TAB_LENGTH = 4;
 int RELATIVE_LINE_NUMBERS = 0;
+int UNDO_STACK_SIZE = 100;
 
 enum keys {
   BACKSPACE = 127,
@@ -52,9 +53,19 @@ enum Highlight {
   MATCH
 };
 
+typedef enum { EDITNONE, EDITINSERT, EDITDELETE } ActionType;
+
 #define HL_NUMBERS (1 << 0)
 #define HL_STRINGS (1 << 1)
 #define HL_SEPARATORS (1 << 2)
+
+static struct {
+  ActionType type;
+  int row;
+  int lastcol;
+  bool active;
+} coalesce_state = {.active = false};
+
 struct syntax {
   char *singleCommentStart;
   char *multicommentstart;
@@ -75,6 +86,12 @@ struct erow {
   bool openComment;
 };
 
+struct action {
+  struct erow oldrow;
+  int at;
+  ActionType type;
+};
+
 struct editor {
   int cx, cy;
   int rx;
@@ -90,6 +107,10 @@ struct editor {
   struct termios og;
   bool dirty;
   struct syntax *syntax;
+  struct action *UndoStack;
+  int undotop;
+  struct action *RedoStack;
+  int redotop;
 };
 
 struct editor E;
@@ -416,6 +437,185 @@ void selectHL() {
   }
 }
 
+void pushUndo(ActionType type, int rowidx, int col) {
+  E.redotop = 0;
+  if (rowidx < 0 || rowidx >= E.numrows)
+    return;
+
+  bool coalesce = coalesce_state.active && coalesce_state.type == type &&
+                  coalesce_state.row == rowidx &&
+                  ((type == EDITINSERT && col == coalesce_state.lastcol + 1) ||
+                   (type == EDITDELETE && col == coalesce_state.lastcol - 1));
+
+  if (coalesce) {
+    coalesce_state.lastcol = col;
+    return;
+  }
+
+  struct erow *src = &E.row[rowidx];
+  struct action edit;
+  edit.at = rowidx;
+  edit.type = type;
+  edit.oldrow.size = src->size;
+  edit.oldrow.rsize = src->rsize;
+  edit.oldrow.openComment = src->openComment;
+  edit.oldrow.line = strdup(src->line);
+  edit.oldrow.idx = src->idx;
+  edit.oldrow.render = strdup(src->render);
+  edit.oldrow.highlight = malloc(sizeof(unsigned char) * src->size);
+  if (edit.oldrow.highlight)
+    memcpy(edit.oldrow.highlight, src->highlight,
+           sizeof(unsigned char) * src->size);
+  else
+    edit.oldrow.highlight = NULL;
+
+  if (E.undotop == UNDO_STACK_SIZE - 1) {
+    free(E.UndoStack[0].oldrow.line);
+    free(E.UndoStack[0].oldrow.render);
+    free(E.UndoStack[0].oldrow.highlight);
+    memmove(&E.UndoStack[0], &E.UndoStack[1],
+            sizeof(struct action) * (UNDO_STACK_SIZE - 1));
+    E.undotop--;
+  }
+
+  E.UndoStack[E.undotop++] = edit;
+
+  coalesce_state.type = type;
+  coalesce_state.row = rowidx;
+  coalesce_state.lastcol = col;
+  coalesce_state.active = true;
+}
+
+void applyUndo() {
+  if (E.undotop == 0)
+    return;
+
+  struct action *edit = &E.UndoStack[--E.undotop];
+  int row = edit->at;
+  if (row < 0 || row > E.numrows)
+    return;
+
+  struct erow *cur = &E.row[row];
+
+  struct action redo;
+  redo.at = row;
+  redo.type = edit->type;
+  redo.oldrow.size = cur->size;
+  redo.oldrow.rsize = cur->rsize;
+  redo.oldrow.idx = cur->idx;
+  redo.oldrow.openComment = cur->openComment;
+  redo.oldrow.line = strdup(cur->line);
+  redo.oldrow.render = strdup(cur->render);
+  redo.oldrow.highlight = malloc(sizeof(unsigned char) * cur->size);
+  if (redo.oldrow.highlight)
+    memcpy(redo.oldrow.highlight, cur->highlight,
+           sizeof(unsigned char) * cur->size);
+
+  if (E.redotop == UNDO_STACK_SIZE) {
+    free(E.RedoStack[0].oldrow.line);
+    free(E.RedoStack[0].oldrow.render);
+    free(E.RedoStack[0].oldrow.highlight);
+    memmove(&E.RedoStack[0], &E.RedoStack[1],
+            sizeof(struct action) * UNDO_STACK_SIZE - 1);
+    E.redotop--;
+  }
+
+  E.RedoStack[E.redotop++] = redo;
+
+  free(cur->line);
+  free(cur->render);
+  free(cur->highlight);
+
+  cur->size = edit->oldrow.size;
+  cur->rsize = edit->oldrow.rsize;
+  cur->idx = edit->oldrow.idx;
+  cur->openComment = edit->oldrow.openComment;
+
+  cur->line = strdup(edit->oldrow.line);
+  cur->render = strdup(edit->oldrow.render);
+
+  if (edit->oldrow.highlight && cur->size > 0) {
+    cur->highlight = malloc(sizeof(unsigned char) * cur->size);
+    memcpy(cur->highlight, edit->oldrow.highlight,
+           sizeof(unsigned char) * cur->size);
+  } else
+    cur->highlight = NULL;
+
+  E.cy = row;
+  if (E.cx > cur->size)
+    E.cx = cur->size;
+  E.dirty = true;
+
+  coalesce_state.active = false;
+
+  free(edit->oldrow.line);
+  free(edit->oldrow.render);
+  free(edit->oldrow.highlight);
+}
+
+void applyRedo() {
+  if (E.redotop == 0)
+    return;
+
+  struct action *act = &E.RedoStack[--E.redotop];
+  int row = act->at;
+  if (row < 0 || row >= E.numrows)
+    return;
+
+  struct erow *dst = &E.row[row];
+
+  struct action undo;
+  undo.at = row;
+  undo.type = act->type;
+  undo.oldrow.size = dst->size;
+  undo.oldrow.rsize = dst->rsize;
+  undo.oldrow.idx = dst->idx;
+  undo.oldrow.openComment = dst->openComment;
+  undo.oldrow.line = strdup(dst->line);
+  undo.oldrow.render = strdup(dst->render);
+  undo.oldrow.highlight = malloc(sizeof(unsigned char) * dst->size);
+  if (undo.oldrow.highlight)
+    memcpy(undo.oldrow.highlight, dst->highlight,
+           sizeof(unsigned char) * dst->size);
+
+  if (E.undotop == UNDO_STACK_SIZE) {
+    free(E.UndoStack[0].oldrow.line);
+    free(E.UndoStack[0].oldrow.render);
+    free(E.UndoStack[0].oldrow.highlight);
+    memmove(&E.UndoStack[0], &E.UndoStack[1],
+            sizeof(struct action) * (UNDO_STACK_SIZE - 1));
+    E.undotop--;
+  }
+
+  E.UndoStack[E.undotop++] = undo;
+
+  free(dst->line);
+  free(dst->render);
+  free(dst->highlight);
+
+  dst->size = act->oldrow.size;
+  dst->rsize = act->oldrow.rsize;
+  dst->idx = act->oldrow.idx;
+  dst->openComment = act->oldrow.openComment;
+  dst->line = strdup(act->oldrow.line);
+  dst->render = strdup(act->oldrow.render);
+  dst->highlight = malloc(sizeof(unsigned char) * dst->size);
+  if (dst->highlight)
+    memcpy(dst->highlight, act->oldrow.highlight,
+           sizeof(unsigned char) * dst->size);
+
+  E.cy = row;
+  if (E.cx > dst->size)
+    E.cx = dst->size;
+
+  E.dirty = true;
+  coalesce_state.active = false;
+
+  free(act->oldrow.line);
+  free(act->oldrow.render);
+  free(act->oldrow.highlight);
+}
+
 int cxtorx(struct erow *row, int cx) {
   int rx = 0;
   for (int i = 0; i < cx; i++) {
@@ -526,6 +726,8 @@ void rowdeletechar(struct erow *row, int at) {
 }
 
 void insertchar(int c) {
+  if (!coalesce_state.active)
+    pushUndo(EDITINSERT, E.cy, E.cx);
   if (E.cy == E.numrows)
     editorInsertRow(E.numrows, "", 0);
   rowinsertchar(&E.row[E.cy], E.cx, c);
@@ -562,6 +764,13 @@ void deletechar() {
   if (E.cx == 0 && E.cy == 0)
     return;
 
+  if (!coalesce_state.active) {
+    if (E.cx > 0)
+      pushUndo(EDITDELETE, E.cy, E.cx - 1);
+    else
+      pushUndo(EDITDELETE, E.cy - 1, E.row[E.cy - 1].size);
+  }
+
   struct erow *row = &E.row[E.cy];
   if (E.cx > 0) {
     rowdeletechar(row, E.cx - 1);
@@ -571,6 +780,7 @@ void deletechar() {
     rowinsertstring(&E.row[E.cy - 1], row->line, row->size);
     editorDelRow(E.cy);
     E.cy--;
+    coalesce_state.active = false;
   }
 }
 
@@ -950,6 +1160,7 @@ void clearscreen() {
 }
 
 void movecursor(int key) {
+  coalesce_state.active = false;
   struct erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
   switch (key) {
   case ARROW_LEFT:
@@ -1017,6 +1228,14 @@ void processkey() {
     find();
     break;
 
+  case CTRL_KEY('z'):
+    applyUndo();
+    break;
+
+  case CTRL_KEY('y'):
+    applyRedo();
+    break;
+
   case PG_UP:
   case PG_DN: {
     if (c == PG_UP)
@@ -1079,6 +1298,10 @@ void geteditor() {
   E.statusmsg_time = 0;
   E.dirty = false;
   E.syntax = NULL;
+  E.UndoStack = malloc(sizeof(struct action) * UNDO_STACK_SIZE);
+  E.undotop = 0;
+  E.RedoStack = malloc(sizeof(struct action) * UNDO_STACK_SIZE);
+  E.redotop = 0;
   if (windowsize(&E.rows, &E.cols) == -1)
     kill("GetWindowSize");
   E.rows -= 2;

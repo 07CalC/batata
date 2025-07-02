@@ -21,9 +21,11 @@
 #include <unistd.h>
 
 #define CTRL_KEY(k) ((k) & 0x1f)
-#define editor_version "0.0.1"
-#define TAB_LENGTH 4
-#define RELATIVE_LINE_NUMBERS 0 // 0 to disable 1 to enable
+#define editor_version "0.0.2"
+
+// Defaults to be ovverwritten by .batatarc
+int TAB_LENGTH = 4;
+int RELATIVE_LINE_NUMBERS = 0;
 
 enum keys {
   BACKSPACE = 127,
@@ -1082,9 +1084,44 @@ void geteditor() {
   E.rows -= 2;
 }
 
+void getConfig(char *filename) {
+  FILE *fp = fopen(filename, "r");
+  if (!fp)
+    kill("fopen");
+
+  char *line = NULL;
+  size_t linecap = 0;
+  ssize_t linelen;
+  while ((linelen = getline(&line, &linecap, fp)) != -1) {
+    while (linelen > 0 &&
+           (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
+      linelen--;
+    line[strcspn(line, "\n")] = 0;
+    char *eq = strchr(line, '=');
+    if (!eq)
+      continue;
+    *eq = '\0';
+    char *key = line;
+    char *value = eq + 1;
+
+    while (*key == ' ')
+      key++;
+    while (*value == ' ')
+      value++;
+
+    if (strcmp(key, "TAB_LENGTH") == 0)
+      TAB_LENGTH = atoi(value);
+    else if (strcmp(key, "RELATIVE_LINE_NUMBERS") == 0)
+      RELATIVE_LINE_NUMBERS = atoi(value);
+  }
+  free(line);
+  fclose(fp);
+}
+
 int main(int argc, char *argv[]) {
   rawmode();
   geteditor();
+  getConfig(".batatarc");
   if (argc >= 2) {
     editorOpen(argv[1]);
   }

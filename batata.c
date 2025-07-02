@@ -36,11 +36,25 @@ enum keys {
   DEL
 };
 
-enum Highlight { NORMAL = 0, NUMBER, MATCH };
+enum Highlight {
+  NORMAL = 0,
+  NUMBER,
+  STRING,
+  SEPARATOR,
+  COMMENT,
+  KEY1,
+  KEY2,
+  MATCH
+};
+
 #define HL_NUMBERS (1 << 0)
+#define HL_STRINGS (1 << 1)
+#define HL_SEPARATORS (1 << 2)
 struct syntax {
+  char *singleCommentStart;
   char *ftype;
   char **fmatch;
+  char **keywords;
   int flags;
 };
 
@@ -72,9 +86,14 @@ struct editor {
 struct editor E;
 
 char *C_EXTENSIONS[] = {".c", ".h", ".cpp", NULL};
-
+char *C_KEYWORDS[] = {"switch",    "if",      "while",   "for",    "break",
+                      "continue",  "return",  "else",    "struct", "union",
+                      "typedef",   "static",  "enum",    "class",  "case",
+                      "int|",      "long|",   "double|", "float|", "char|",
+                      "unsigned|", "signed|", "void|",   NULL};
 struct syntax HLDB[] = {
-    {"c", C_EXTENSIONS, HL_NUMBERS},
+    {"//", "c", C_EXTENSIONS, C_KEYWORDS,
+     HL_NUMBERS | HL_STRINGS | HL_SEPARATORS},
 };
 
 #define HLDB_SIZE (sizeof(HLDB) / sizeof(HLDB[0]))
@@ -225,13 +244,49 @@ void updateSyntax(struct erow *row) {
   memset(row->highlight, NORMAL, row->size);
   if (E.syntax == NULL)
     return;
+  char **keys = E.syntax->keywords;
+
+  char *sc = E.syntax->singleCommentStart; // single Comment Start
+  int scLen = sc ? strlen(sc) : 0;
 
   bool prevSep = true;
+  int inString = false; // Stores the actual " or '
 
   int i = 0;
   while (i < row->rsize) {
     char c = row->render[i];
     unsigned char prevHL = (i > 0) ? row->highlight[i - 1] : NORMAL;
+
+    if (scLen && !inString) {
+      if (!strncmp(&row->render[i], sc, scLen)) {
+        memset(&row->highlight[i], COMMENT, row->size - i);
+        break;
+      }
+    }
+
+    if (E.syntax->flags & HL_STRINGS) {
+      if (inString) {
+        row->highlight[i] = STRING;
+        if (c == '\\' && i + 1 < row->size) {
+          row->highlight[i + 1] = STRING;
+          i += 2;
+          continue;
+        }
+        if (c == inString)
+          inString = 0;
+        i++;
+        prevSep = true;
+        continue;
+      } else {
+        if (c == '"' || c == '\'') {
+          inString = c;
+          row->highlight[i] = STRING;
+          i++;
+          continue;
+        }
+      }
+    }
+
     if (E.syntax->flags & HL_NUMBERS) {
       if ((isdigit(c) && (prevSep || prevHL == NUMBER)) ||
           (c == '.' && prevHL == NUMBER)) {
@@ -241,6 +296,37 @@ void updateSyntax(struct erow *row) {
         continue;
       }
     }
+
+    if (prevSep) {
+      int j;
+      for (j = 0; keys[j]; j++) {
+        int klen = strlen(keys[j]);
+        bool kw2 = keys[j][klen - 1] == '|';
+        if (kw2)
+          klen--;
+
+        if (!strncmp(&row->render[i], keys[j], klen) &&
+            isSepator(row->render[i + klen])) {
+          memset(&row->highlight[i], kw2 ? KEY2 : KEY1, klen);
+          i += klen;
+          break;
+        }
+      }
+      if (keys[j] != NULL) {
+        prevSep = 0;
+        continue;
+      }
+    }
+
+    if (E.syntax->flags & HL_SEPARATORS) {
+      if (isSepator(c)) {
+        row->highlight[i] = SEPARATOR;
+        i++;
+        prevSep = true;
+        continue;
+      }
+    }
+
     prevSep = isSepator(c);
     i++;
   }
@@ -248,10 +334,21 @@ void updateSyntax(struct erow *row) {
 
 int syntocolour(int hl) {
   switch (hl) {
+  // ANSI colour codes
   case NUMBER:
     return 31;
   case MATCH:
     return 36;
+  case STRING:
+    return 92;
+  case SEPARATOR:
+    return 90;
+  case COMMENT:
+    return 32;
+  case KEY1:
+    return 62;
+  case KEY2:
+    return 212;
   default:
     return 37;
   }
@@ -263,7 +360,7 @@ void selectHL() {
     return;
 
   char *ex = strchr(E.filename, '.');
-  for (int j = 0; j < (HLDB_SIZE); j++) {
+  for (int j = 0; (long unsigned int)j < (HLDB_SIZE); j++) {
     struct syntax *s = &HLDB[j];
     int i = 0;
     while (s->fmatch[i]) {
@@ -271,6 +368,8 @@ void selectHL() {
       if ((verified && ex && !strcmp(ex, s->fmatch[i])) ||
           (!verified && strstr(E.filename, s->fmatch[i]))) {
         E.syntax = s;
+        for (int row = 0; row < E.numrows; row++)
+          updateSyntax(&E.row[row]);
         return;
       }
       i++;
@@ -450,6 +549,7 @@ char *rowstostring(int *len) {
 void editorOpen(char *filename) {
   free(E.filename);
   E.filename = strdup(filename);
+  selectHL();
   FILE *fp = fopen(filename, "r");
   if (!fp)
     kill("fopen");
@@ -475,6 +575,7 @@ void save() {
       setstatus("Save Aborted");
       return;
     }
+    selectHL();
   }
 
   int len;

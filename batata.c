@@ -1,3 +1,4 @@
+#include <bits/pthreadtypes.h>
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
 #define _GNU_SOURCE
@@ -42,6 +43,7 @@ enum Highlight {
   STRING,
   SEPARATOR,
   COMMENT,
+  MULTICOMMENT,
   KEY1,
   KEY2,
   MATCH
@@ -52,6 +54,8 @@ enum Highlight {
 #define HL_SEPARATORS (1 << 2)
 struct syntax {
   char *singleCommentStart;
+  char *multicommentstart;
+  char *multicommentend;
   char *ftype;
   char **fmatch;
   char **keywords;
@@ -64,6 +68,8 @@ struct erow {
   char *line;
   char *render;
   unsigned char *highlight;
+  int idx;
+  bool openComment;
 };
 
 struct editor {
@@ -92,7 +98,7 @@ char *C_KEYWORDS[] = {"switch",    "if",      "while",   "for",    "break",
                       "int|",      "long|",   "double|", "float|", "char|",
                       "unsigned|", "signed|", "void|",   NULL};
 struct syntax HLDB[] = {
-    {"//", "c", C_EXTENSIONS, C_KEYWORDS,
+    {"//", "/*", "*/", "c", C_EXTENSIONS, C_KEYWORDS,
      HL_NUMBERS | HL_STRINGS | HL_SEPARATORS},
 };
 
@@ -247,20 +253,46 @@ void updateSyntax(struct erow *row) {
   char **keys = E.syntax->keywords;
 
   char *sc = E.syntax->singleCommentStart; // single Comment Start
+  char *mcs = E.syntax->multicommentstart;
+  char *mce = E.syntax->multicommentend;
   int scLen = sc ? strlen(sc) : 0;
+  int mcsLen = mcs ? strlen(mcs) : 0;
+  int mceLen = mce ? strlen(mce) : 0;
 
   bool prevSep = true;
-  int inString = false; // Stores the actual " or '
+  int inString = 0; // Stores the actual " or '
+  bool inComment = (row->idx > 0 && E.row[row->idx - 1].openComment);
 
   int i = 0;
   while (i < row->rsize) {
     char c = row->render[i];
     unsigned char prevHL = (i > 0) ? row->highlight[i - 1] : NORMAL;
 
-    if (scLen && !inString) {
+    if (scLen && !inString && !inComment) {
       if (!strncmp(&row->render[i], sc, scLen)) {
         memset(&row->highlight[i], COMMENT, row->size - i);
         break;
+      }
+    }
+
+    if (mcsLen && mceLen && !inString) {
+      if (inComment) {
+        row->highlight[i] = MULTICOMMENT;
+        if (strncmp(&row->render[i], mce, mceLen) == 0) {
+          memset(&row->highlight[i], MULTICOMMENT, mceLen);
+          i += mceLen;
+          inComment = false;
+          prevSep = true;
+          continue;
+        } else {
+          i++;
+          continue;
+        }
+      } else if (strncmp(&row->render[i], mcs, mcsLen) == 0) {
+        memset(&row->highlight[i], MULTICOMMENT, mcsLen);
+        i += mcsLen;
+        inComment = true;
+        continue;
       }
     }
 
@@ -330,6 +362,10 @@ void updateSyntax(struct erow *row) {
     prevSep = isSepator(c);
     i++;
   }
+  bool diff = (row->openComment != inComment);
+  row->openComment = inComment;
+  if (diff && row->idx + 1 < E.numrows)
+    updateSyntax(&E.row[row->idx + 1]);
 }
 
 int syntocolour(int hl) {
@@ -429,6 +465,10 @@ void editorInsertRow(int at, char *s, size_t len) {
     return;
   E.row = realloc(E.row, sizeof(struct erow) * (E.numrows + 1));
   memmove(&E.row[at + 1], &E.row[at], sizeof(struct erow) * (E.numrows - at));
+  for (int i = at + 1; i <= E.numrows; i++)
+    E.row[i].idx++;
+
+  E.row[at].idx = at;
 
   E.row[at].size = len;
   E.row[at].line = malloc(len + 1);
@@ -438,6 +478,7 @@ void editorInsertRow(int at, char *s, size_t len) {
   E.row[at].rsize = 0;
   E.row[at].render = NULL;
   E.row[at].highlight = NULL;
+  E.row[at].openComment = false;
   updaterow(&E.row[at]);
   E.numrows++;
   E.dirty = true;
@@ -455,6 +496,8 @@ void editorDelRow(int at) {
   editorFreeRow(&E.row[at]);
   memmove(&E.row[at], &E.row[at + 1],
           sizeof(struct erow) * (E.numrows - at - 1));
+  for (int i = at; i < E.numrows - 1; i++)
+    E.row[i].idx--;
   E.numrows--;
   E.dirty = true;
 }
@@ -734,7 +777,17 @@ void drawrows(struct abuf *ab) {
       unsigned char *hl = &E.row[filerow].highlight[E.coloff];
       int curColour = -1;
       for (int j = 0; j < len; j++) {
-        if (hl[j] == NORMAL) {
+        if (iscntrl(c[j])) {
+          char sym = (c[j] <= 26) ? '@' + c[j] : '?';
+          abAdd(ab, "\x1b[7m", 4);
+          abAdd(ab, &sym, 1);
+          abAdd(ab, "\x1b[m", 3);
+          if (curColour != -1) {
+            char buf[16];
+            int len = snprintf(buf, sizeof(buf), "\x1b[%dm", curColour);
+            abAdd(ab, buf, len);
+          }
+        } else if (hl[j] == NORMAL) {
           if (curColour != -1) {
             abAdd(ab, "\x1b[39m", 5);
             curColour = -1;

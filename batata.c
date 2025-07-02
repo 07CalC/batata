@@ -21,7 +21,8 @@
 #include <unistd.h>
 
 #define CTRL_KEY(k) ((k) & 0x1f)
-#define editor_version "0.0.2"
+// Now with undo
+#define editor_version "0.0.3"
 
 // Defaults to be ovverwritten by .batatarc
 int TAB_LENGTH = 4;
@@ -111,6 +112,7 @@ struct editor {
   int undotop;
   struct action *RedoStack;
   int redotop;
+  char mode;
 };
 
 struct editor E;
@@ -1147,6 +1149,11 @@ void clearscreen() {
   DrawStatusBar(&ab);
   DrawMessageBar(&ab);
 
+  if (E.mode == 'i') {
+    abAdd(&ab, "\x1b[6 q", 5);
+  } else {
+    abAdd(&ab, "\x1b[2 q", 5);
+  }
   char buf[32];
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1,
            E.rx - E.coloff + 2 +
@@ -1163,6 +1170,7 @@ void movecursor(int key) {
   coalesce_state.active = false;
   struct erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
   switch (key) {
+  case 'h':
   case ARROW_LEFT:
     if (E.cx != 0)
       E.cx--;
@@ -1171,14 +1179,17 @@ void movecursor(int key) {
       E.cx = E.row[E.cy].size;
     }
     break;
+  case 'j':
   case ARROW_DOWN:
     if (E.cy < E.numrows)
       E.cy++;
     break;
+  case 'k':
   case ARROW_UP:
     if (E.cy != 0)
       E.cy--;
     break;
+  case 'l':
   case ARROW_RIGHT:
     if (row && E.cx < row->size)
       E.cx++;
@@ -1194,8 +1205,70 @@ void movecursor(int key) {
   if (E.cx > rowlen)
     E.cx = rowlen;
 }
+// proecess normal mode keypresses
+void processcommands() {
+  if (E.mode != 'n')
+    return;
+  int c = readkey();
+  switch (c) {
+  case CTRL_KEY('q'):
+    if (E.dirty) {
+      setstatus("Warning!! The file has unsaved changes, press 'y or Y' to "
+                "confirm and quit:");
+      clearscreen();
+      int c = readkey();
+      if (c != 'y' && c != 'Y') {
+        setstatus("Quitting Cancelled");
+        clearscreen();
+        break;
+      }
+    }
+    write(STDOUT_FILENO, "\x1b[2j", 4);
+    write(STDOUT_FILENO, "\x1b[H", 3);
+    exit(0);
 
+    break;
+  case CTRL_KEY('s'):
+    save();
+    break;
+  case CTRL_KEY('z'):
+    applyUndo();
+    break;
+  case CTRL_KEY('y'):
+    applyRedo();
+    break;
+    return;
+
+  case 'i':
+    E.mode = 'i';
+    break;
+  case 'a':
+    movecursor(ARROW_RIGHT);
+    E.mode = 'i';
+    break;
+  case 'h':
+  case 'j':
+  case 'k':
+  case 'l':
+    movecursor(c);
+    break;
+  case 'x':
+    movecursor(ARROW_RIGHT);
+    deletechar();
+  }
+}
+
+// Process insert mode keypresses
 void processkey() {
+  if (E.mode != 'i') {
+    if (E.mode == 'n') {
+      processcommands();
+      return;
+    } else if (E.mode == 'v') {
+      // processSelection();
+      return;
+    }
+  }
   int c = readkey();
   switch (c) {
   case '\r':
@@ -1277,6 +1350,7 @@ void processkey() {
 
   case CTRL_KEY('l'):
   case '\x1b':
+    E.mode = 'n';
     break;
 
   default:
@@ -1302,6 +1376,7 @@ void geteditor() {
   E.undotop = 0;
   E.RedoStack = malloc(sizeof(struct action) * UNDO_STACK_SIZE);
   E.redotop = 0;
+  E.mode = 'n';
   if (windowsize(&E.rows, &E.cols) == -1)
     kill("GetWindowSize");
   E.rows -= 2;

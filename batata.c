@@ -1,4 +1,3 @@
-#include <bits/pthreadtypes.h>
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
 #define _GNU_SOURCE
@@ -8,6 +7,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -747,9 +747,8 @@ void drawrows(struct abuf *ab) {
     if (filerow >= E.numrows) {
       if (y == E.rows / 3 && E.numrows == 0) {
         char message[80];
-        int messagelen =
-            snprintf(message, sizeof(message), "Batata editor -- version %s",
-                     editor_version);
+        int messagelen = snprintf(message, sizeof(message),
+                                  "Batata -- version %s", editor_version);
         if (messagelen > E.cols)
           messagelen = E.cols;
 
@@ -767,6 +766,19 @@ void drawrows(struct abuf *ab) {
         abAdd(ab, "~", 1);
       }
     } else {
+      // Prints the line Number
+      int padding = (E.numrows > 0) ? (int)log10(E.numrows) + 1 : 1;
+      char *lineNum = (char *)malloc(sizeof(char) * 16);
+      int wlen = snprintf(lineNum, 16, "%d", filerow + 1);
+      padding -= wlen;
+      for (; padding > 0; padding--)
+        abAdd(ab, " ", 1);
+      abAdd(ab, "\x1b[32m", 5);
+      abAdd(ab, lineNum, wlen);
+      abAdd(ab, "\x1b[39m", 5);
+      abAdd(ab, " ", 1);
+      free(lineNum);
+
       int len = E.row[filerow].rsize - E.coloff;
       if (len < 0)
         len = 0;
@@ -911,7 +923,8 @@ void clearscreen() {
 
   char buf[32];
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1,
-           E.rx - E.coloff + 1);
+           E.rx - E.coloff + 2 +
+               ((E.numrows > 0) ? (int)log10(E.numrows) + 1 : 1));
   abAdd(&ab, buf, strlen(buf));
 
   abAdd(&ab, "\x1b[?25h", 6);

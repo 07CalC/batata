@@ -23,6 +23,7 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define editor_version "0.0.1"
 #define TAB_LENGTH 4
+#define RELATIVE_LINE_NUMBERS 0 // 0 to disable 1 to enable
 
 enum keys {
   BACKSPACE = 127,
@@ -382,9 +383,9 @@ int syntocolour(int hl) {
   case COMMENT:
     return 32;
   case KEY1:
-    return 62;
+    return 94;
   case KEY2:
-    return 212;
+    return 35;
   default:
     return 37;
   }
@@ -768,16 +769,29 @@ void drawrows(struct abuf *ab) {
     } else {
       // Prints the line Number
       int padding = (E.numrows > 0) ? (int)log10(E.numrows) + 1 : 1;
-      char *lineNum = (char *)malloc(sizeof(char) * 16);
-      int wlen = snprintf(lineNum, 16, "%d", filerow + 1);
+      char lineNum[16];
+      int number = 0;
+      if (RELATIVE_LINE_NUMBERS)
+        number = (filerow == E.cy) ? filerow + 1 : abs(filerow - E.cy);
+      else
+        number = filerow + 1;
+
+      int wlen = snprintf(lineNum, sizeof(lineNum), "%d", number);
       padding -= wlen;
+
       for (; padding > 0; padding--)
         abAdd(ab, " ", 1);
-      abAdd(ab, "\x1b[32m", 5);
-      abAdd(ab, lineNum, wlen);
-      abAdd(ab, "\x1b[39m", 5);
+
+      if (filerow == E.cy) {
+        abAdd(ab, "\x1b[32m", 5);
+        abAdd(ab, lineNum, wlen);
+        abAdd(ab, "\x1b[39m", 5);
+
+      } else {
+        abAdd(ab, lineNum, wlen);
+      }
+
       abAdd(ab, " ", 1);
-      free(lineNum);
 
       int len = E.row[filerow].rsize - E.coloff;
       if (len < 0)

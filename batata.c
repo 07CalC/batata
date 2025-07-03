@@ -1722,7 +1722,7 @@ void geteditor() {
 void getConfig(char *filename) {
   FILE *fp = fopen(filename, "r");
   if (!fp)
-    kill("fopen");
+    return;
 
   char *line = NULL;
   size_t linecap = 0;

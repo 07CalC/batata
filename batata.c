@@ -39,7 +39,8 @@ enum keys {
   PG_DN,
   HOME,
   END,
-  DEL
+  DEL,
+  MOUSE_EVENT
 };
 
 enum Highlight {
@@ -87,10 +88,18 @@ struct erow {
   bool openComment;
 };
 
+// For Undo and Redo
 struct action {
   struct erow oldrow;
   int at;
   ActionType type;
+};
+
+// The primeagen way
+struct vimMotion {
+  char command;
+  int count;
+  char motion;
 };
 
 struct editor {
@@ -132,6 +141,7 @@ struct syntax HLDB[] = {
 void setstatus(const char *format, ...);
 void clearscreen();
 char *editorprompt(char *prompt, void (*callback)(char *, int));
+void handlemouse(int btn, int x, int y, char type);
 
 void kill(const char *s) {
   write(STDOUT_FILENO, "\x1b[2J", 4);
@@ -165,6 +175,16 @@ void rawmode() {
   }
 }
 
+void enableMouse() {
+  write(STDOUT_FILENO, "\x1b[?1000h", 8);
+  write(STDOUT_FILENO, "\x1b[?1006h", 8);
+}
+
+void disableMouse() {
+  write(STDOUT_FILENO, "\x1b[?10001", 8);
+  write(STDOUT_FILENO, "\x1b[?10061", 8);
+}
+
 int readkey() {
   int n;
   char c;
@@ -174,19 +194,42 @@ int readkey() {
   }
 
   if (c == '\x1b') {
-    char sq[3];
+    char sq[32];
+    sq[0] = '\x1b';
 
-    if (read(STDIN_FILENO, &sq[0], 1) != 1)
-      return '\x1b';
     if (read(STDIN_FILENO, &sq[1], 1) != 1)
       return '\x1b';
+    if (read(STDIN_FILENO, &sq[2], 1) != 1)
+      return '\x1b';
 
-    if (sq[0] == '[') {
-      if (sq[1] >= '0' && sq[1] <= '9') {
-        if (read(STDIN_FILENO, &sq[2], 1) != 1)
+    // Mouse Support
+    if (sq[1] == '[' && sq[2] == '<') {
+      int i = 3;
+      while (i < (int)sizeof(sq) - 1) {
+        if (read(STDIN_FILENO, &sq[i], 1) != 1)
+          break;
+        if (sq[i] == 'm' || sq[i] == 'M') {
+          sq[++i] = '\0';
+          break;
+        }
+        i++;
+      }
+      int btn, x, y;
+      char type;
+      if (sscanf(sq, "\x1b[<%d;%d;%d%c", &btn, &x, &y, &type) == 4) {
+        handlemouse(btn, x, y, type);
+        return MOUSE_EVENT;
+      } else {
+        write(STDOUT_FILENO, "\nChud Gaye\n", 11);
+      }
+    }
+
+    if (sq[1] == '[') {
+      if (sq[2] >= '0' && sq[2] <= '9') {
+        if (read(STDIN_FILENO, &sq[3], 1) != 1)
           return '\x1b';
-        if (sq[2] == '~') {
-          switch (sq[1]) {
+        if (sq[3] == '~') {
+          switch (sq[2]) {
           case '1':
             return HOME;
           case '3':
@@ -204,7 +247,7 @@ int readkey() {
           }
         }
       } else {
-        switch (sq[1]) {
+        switch (sq[2]) {
         case 'A':
           return ARROW_UP;
         case 'B':
@@ -219,8 +262,8 @@ int readkey() {
           return END;
         }
       }
-    } else if (sq[0] == '0') {
-      switch (sq[1]) {
+    } else if (sq[1] == '0') {
+      switch (sq[2]) {
       case 'H':
         return HOME;
       case 'F':
@@ -267,8 +310,8 @@ int windowsize(int *rows, int *cols) {
   }
 }
 
-bool isSepator(int c) {
-  return isspace(c) || c == '\0' || strchr(",.()+=/*=~%<>[];", c) != NULL;
+int isSepator(int c) {
+  return isspace(c) || c == '\0' || strchr(",.()+=/*=~%<>[];<>#-_", c) != NULL;
 }
 
 void updateSyntax(struct erow *row) {
@@ -1170,7 +1213,6 @@ void movecursor(int key) {
   coalesce_state.active = false;
   struct erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
   switch (key) {
-  case 'h':
   case ARROW_LEFT:
     if (E.cx != 0)
       E.cx--;
@@ -1179,17 +1221,14 @@ void movecursor(int key) {
       E.cx = E.row[E.cy].size;
     }
     break;
-  case 'j':
   case ARROW_DOWN:
     if (E.cy < E.numrows)
       E.cy++;
     break;
-  case 'k':
   case ARROW_UP:
     if (E.cy != 0)
       E.cy--;
     break;
-  case 'l':
   case ARROW_RIGHT:
     if (row && E.cx < row->size)
       E.cx++;
@@ -1205,6 +1244,167 @@ void movecursor(int key) {
   if (E.cx > rowlen)
     E.cx = rowlen;
 }
+
+void handlemouse(int btn, int x, int y, char type) {
+  if (type == 'M') {
+    switch (btn) {
+    case 0: {
+      int lineNumGutter = (E.numrows > 0) ? (int)log10(E.numrows) + 1 : 1;
+
+      E.cy = y - 1 + E.rowoff;
+      E.cx = x - 1 - (lineNumGutter + 1) + E.coloff;
+
+      if (E.cy < 0)
+        E.cy = 0;
+      if (E.cx < 0)
+        E.cx = 0;
+      if (E.cy >= E.numrows)
+        E.cy = E.numrows - 1;
+      if (E.cx >= E.row[E.cy].size)
+        E.cx = E.row[E.cy].size - 1;
+
+      if (E.cy < E.numrows)
+        E.rx = cxtorx(&E.row[E.cy], E.cx);
+      else
+        E.rx = 0;
+    }
+
+    case 2: {
+      // TODO: Right Click8
+      break;
+    }
+
+    case 64: {
+      if (E.rowoff > 0)
+        E.rowoff--;
+      if (E.cy == E.rowoff + E.rows)
+        movecursor(ARROW_UP);
+      if (E.cy < E.rowoff)
+        E.cy = E.rowoff;
+
+      if (E.cy >= E.numrows)
+        E.cy = E.numrows - 1;
+      break;
+    }
+
+    case 65: {
+      if (E.rowoff < E.numrows - 1)
+        E.rowoff++;
+      if (E.cy == E.rowoff - 1) {
+        movecursor(ARROW_DOWN);
+        E.rowoff++;
+      }
+      if (E.cy <= 0)
+        movecursor(ARROW_DOWN);
+      break;
+    }
+    }
+  }
+}
+
+void nextWord(char key) {
+  if (E.mode != 'n')
+    return;
+  int (*fptr)(int) = ((key == 'w') ? &isSepator : &isspace);
+  int cx = E.cx;
+  int cy = E.cy;
+  while (cy < E.numrows) {
+    struct erow *row = &E.row[cy];
+    if (fptr(row->line[cx])) {
+      while (cx < row->size && fptr(row->line[cx]))
+        cx++;
+      if (cx < row->size) {
+        E.cx = cx;
+        E.cy = cy;
+        return;
+      }
+    } else {
+      while (cx < row->size && fptr(row->line[cx]))
+        cx++;
+      while (cx < row->size && !fptr(row->line[cx]))
+        cx++;
+      while (cx < row->size && fptr(row->line[cx]))
+        cx++;
+    }
+    if (cx < row->size) {
+      E.cx = cx;
+      E.cy = cy;
+      return;
+    } else {
+      cx = 0;
+      cy++;
+    }
+  }
+  E.cx = 0;
+  E.cy = E.numrows - 1;
+}
+
+void prevword(char key) {
+  if (E.mode != 'n')
+    return;
+  int (*fptr)(int) = ((key == 'b') ? &isSepator : &isspace);
+  int cx = E.cx;
+  int cy = E.cy;
+  while (cy < E.numrows) {
+    struct erow *row = &E.row[cy];
+    if (fptr(row->line[cx])) {
+      while (cx > 0 && fptr(row->line[cx]))
+        cx--;
+      if (cx > 0) {
+        E.cx = cx;
+        E.cy = cy;
+        return;
+      }
+    } else {
+      while (cx > 0 && fptr(row->line[cx]))
+        cx--;
+      while (cx > 0 && !fptr(row->line[cx]))
+        cx--;
+      while (cx > 0 && fptr(row->line[cx]))
+        cx--;
+    }
+    if (cx > 0) {
+      E.cx = cx;
+      E.cy = cy;
+      return;
+    } else {
+      cx = 0;
+      movecursor(ARROW_LEFT);
+    }
+  }
+  E.cx = 0;
+  movecursor(ARROW_LEFT);
+}
+
+// Vim motion directions
+void processmotion(int key) {
+  if (E.mode != 'n')
+    return;
+
+  switch (key) {
+  case 'h':
+    movecursor(ARROW_LEFT);
+    break;
+  case 'j':
+    movecursor(ARROW_DOWN);
+    break;
+  case 'k':
+    movecursor(ARROW_UP);
+    break;
+  case 'l':
+    movecursor(ARROW_RIGHT);
+    break;
+  case 'w':
+  case 'W':
+    nextWord(key);
+    break;
+  case 'b':
+  case 'B':
+    nextWord(key);
+    break;
+  }
+}
+
 // proecess normal mode keypresses
 void processcommands() {
   if (E.mode != 'n')
@@ -1239,6 +1439,13 @@ void processcommands() {
     break;
     return;
 
+  case ARROW_LEFT:
+  case ARROW_DOWN:
+  case ARROW_UP:
+  case ARROW_RIGHT:
+    movecursor(c);
+    break;
+
   case 'i':
     E.mode = 'i';
     break;
@@ -1250,11 +1457,16 @@ void processcommands() {
   case 'j':
   case 'k':
   case 'l':
-    movecursor(c);
+  case 'w':
+    processmotion(c);
     break;
   case 'x':
     movecursor(ARROW_RIGHT);
     deletechar();
+    break;
+  case MOUSE_EVENT:
+    clearscreen();
+    break;
   }
 }
 
@@ -1351,6 +1563,11 @@ void processkey() {
   case CTRL_KEY('l'):
   case '\x1b':
     E.mode = 'n';
+    coalesce_state.active = false;
+    break;
+
+  case MOUSE_EVENT:
+    clearscreen();
     break;
 
   default:
@@ -1411,12 +1628,15 @@ void getConfig(char *filename) {
       TAB_LENGTH = atoi(value);
     else if (strcmp(key, "RELATIVE_LINE_NUMBERS") == 0)
       RELATIVE_LINE_NUMBERS = atoi(value);
+    else if (strcmp(key, "UNDO_STACK_SIZE") == 0)
+      UNDO_STACK_SIZE = atoi(value);
   }
   free(line);
   fclose(fp);
 }
 
 int main(int argc, char *argv[]) {
+  enableMouse();
   rawmode();
   geteditor();
   getConfig(".batatarc");

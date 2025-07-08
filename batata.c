@@ -21,6 +21,8 @@
 #include <unistd.h>
 
 #define CTRL_KEY(k) ((k) & 0x1f)
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
 // Now with undo
 #define editor_version "0.0.3"
 
@@ -122,6 +124,8 @@ struct editor {
   struct action *RedoStack;
   int redotop;
   char mode;
+  int sel_x;
+  int sel_y;
 };
 
 struct editor E;
@@ -1001,6 +1005,29 @@ void scroll() {
     E.coloff = E.rx - E.cols + 1;
 }
 
+bool inSelection(int x, int y) {
+  int starty = MIN(E.sel_y, E.cy);
+  int endy = MAX(E.sel_y, E.cy);
+
+  if (y < starty || y > endy)
+    return false;
+
+  if (starty == endy) {
+    int startx = MIN(E.sel_x, E.cx);
+    int endx = MAX(E.sel_x, E.cx);
+    return x >= startx && x <= endx;
+  } else {
+    if (y == starty) {
+      int startx = (E.sel_y < E.cy) ? E.sel_x : E.cx;
+      return x >= startx;
+    } else if (y == endy) {
+      int endx = (E.sel_y < E.cy) ? E.cx : E.sel_x;
+      return x <= endx;
+    } else {
+      return true;
+    }
+  }
+}
 void drawrows(struct abuf *ab) {
   for (int y = 0; y < E.rows; y++) {
     int filerow = y + E.rowoff;
@@ -1083,8 +1110,13 @@ void drawrows(struct abuf *ab) {
           if (curColour != colour) {
             curColour = colour;
             char buf[16];
-            int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", colour);
-            abAdd(ab, buf, clen);
+            if (E.mode == 'v' && inSelection(j, filerow)) {
+              int len = snprintf(buf, sizeof(buf), "\x1b[%d;100m", colour);
+              abAdd(ab, buf, len);
+            } else {
+              int clen = snprintf(buf, sizeof(buf), "\x1b[%d;49m", colour);
+              abAdd(ab, buf, clen);
+            }
           }
           abAdd(ab, &c[j], 1);
         }
@@ -1443,6 +1475,10 @@ void processmotion(int key) {
   case 'B':
     prevWord(key);
     break;
+  case 'e':
+  case 'E':
+    // wordend(key);
+    break;
 
   case '0':
     E.cx = 0;
@@ -1452,6 +1488,40 @@ void processmotion(int key) {
   case '$':
     E.cx = E.row[E.cy].size - 1;
     clearscreen();
+  }
+}
+
+void processSelection() {
+  if (E.mode != 'v')
+    return;
+
+  int c = readkey();
+  switch (c) {
+  case '\x1b':
+    E.mode = 'n';
+    break;
+
+  case ARROW_LEFT:
+  case ARROW_DOWN:
+  case ARROW_UP:
+  case ARROW_RIGHT:
+    movecursor(c);
+    break;
+
+  case 'h':
+  case 'j':
+  case 'k':
+  case 'l':
+  case 'w':
+  case 'W':
+  case 'b':
+  case 'B':
+  case '0':
+  case '$':
+  case 'e':
+  case 'E':
+    processmotion(c);
+    break;
   }
 }
 
@@ -1542,6 +1612,12 @@ void processcommands() {
     insertnewline();
     break;
 
+  case 'v':
+    E.sel_x = E.cx;
+    E.sel_y = E.cy;
+    E.mode = 'v';
+    break;
+
   case 'h':
   case 'j':
   case 'k':
@@ -1552,6 +1628,8 @@ void processcommands() {
   case 'B':
   case '0':
   case '$':
+  case 'e':
+  case 'E':
     processmotion(c);
     break;
   case 'x':
@@ -1588,7 +1666,7 @@ void processkey() {
       processcommands();
       return;
     } else if (E.mode == 'v') {
-      // processSelection();
+      processSelection();
       return;
     }
   }
@@ -1705,6 +1783,8 @@ void geteditor() {
   E.RedoStack = malloc(sizeof(struct action) * UNDO_STACK_SIZE);
   E.redotop = 0;
   E.mode = 'n';
+  E.sel_x = 0;
+  E.sel_y = 0;
   if (windowsize(&E.rows, &E.cols) == -1)
     kill("GetWindowSize");
   E.rows -= 2;

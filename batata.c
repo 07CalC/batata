@@ -1558,6 +1558,23 @@ void processcommands() {
     movecursor(ARROW_RIGHT);
     deletechar();
     break;
+  case 'r':
+    write(STDOUT_FILENO, "\x1b[4 q", 5);
+    int k = readkey();
+    rowdeletechar(&E.row[E.cy], E.cx);
+    rowinsertchar(&E.row[E.cy], E.cx, k);
+    write(STDOUT_FILENO, "\x1b[6 q", 5);
+    break;
+  case 's':
+    write(STDOUT_FILENO, "\x1b[4 q", 5);
+    int l = readkey();
+    rowdeletechar(&E.row[E.cy], E.cx);
+    rowinsertchar(&E.row[E.cy], E.cx, l);
+    E.cx++;
+    E.mode = 'i';
+    write(STDOUT_FILENO, "\x1b[6 q", 5);
+    break;
+
   case MOUSE_EVENT:
     clearscreen();
     break;

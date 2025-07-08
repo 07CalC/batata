@@ -97,13 +97,6 @@ struct action {
   ActionType type;
 };
 
-// The primeagen way
-struct vimMotion {
-  char command;
-  int count;
-  char motion;
-};
-
 struct editor {
   int cx, cy;
   int rx;
@@ -1525,6 +1518,42 @@ void processSelection() {
   }
 }
 
+void Normalgomove() {
+  int c = readkey();
+  switch (c) {
+  case 'g':
+    E.cy = 0;
+    if (E.cx >= E.row[0].size)
+      E.cx = E.row[0].size - 1;
+    break;
+  default:
+    processmotion(c);
+    break;
+  }
+  return;
+}
+
+void toggleCase() {
+  char changed;
+  char c = E.row[E.cy].line[E.cx];
+  if (c >= 'a' && c <= 'z')
+    changed = c - ('a' - 'A');
+  else if (c >= 'A' && c <= 'Z')
+    changed = c + ('a' - 'A');
+  else
+    changed = c;
+  rowdeletechar(&E.row[E.cy], E.cx);
+  rowinsertchar(&E.row[E.cy], E.cx, changed);
+  E.cx = MIN(E.cx + 1, E.row[E.cy].size - 1);
+}
+
+void Normaldelete() {
+  if (E.mode != 'n')
+    return;
+
+  char motion[16];
+}
+
 // proecess normal mode keypresses
 void processcommands() {
   if (E.mode != 'n')
@@ -1651,6 +1680,19 @@ void processcommands() {
     E.cx++;
     E.mode = 'i';
     write(STDOUT_FILENO, "\x1b[6 q", 5);
+    break;
+
+  case 'g':
+    Nromalgomove();
+    break;
+  case 'G':
+    E.cy = E.numrows - 1;
+    if (E.cx > E.row[E.numrows - 1].size)
+      E.cx = E.row[E.numrows - 1].size - 1;
+    break;
+
+  case '~':
+    toggleCase();
     break;
 
   case MOUSE_EVENT:

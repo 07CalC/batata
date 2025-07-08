@@ -1,4 +1,3 @@
-#include <stdatomic.h>
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
 #define _GNU_SOURCE
@@ -1285,6 +1284,7 @@ void handlemouse(int btn, int x, int y, char type) {
         E.rx = cxtorx(&E.row[E.cy], E.cx);
       else
         E.rx = 0;
+      break;
     }
 
     case 2: {
@@ -1293,10 +1293,15 @@ void handlemouse(int btn, int x, int y, char type) {
     }
 
     case 64: {
-      if (E.rowoff > 0)
-        E.rowoff--;
-      if (E.cy == E.rowoff + E.rows)
-        movecursor(ARROW_UP);
+      int scroll = 3;
+      if (E.rowoff >= scroll)
+        E.rowoff -= scroll;
+      else
+        E.rowoff = 0;
+      if (E.cy >= E.rowoff + E.rows)
+        for (int i = 0; i < scroll; i++)
+          movecursor(ARROW_UP);
+      E.rowoff -= scroll;
       if (E.cy < E.rowoff)
         E.cy = E.rowoff;
 
@@ -1306,11 +1311,15 @@ void handlemouse(int btn, int x, int y, char type) {
     }
 
     case 65: {
-      if (E.rowoff < E.numrows - 1)
-        E.rowoff++;
-      if (E.cy == E.rowoff - 1) {
-        movecursor(ARROW_DOWN);
-        E.rowoff++;
+      int scroll = 3;
+      if (E.rowoff < E.numrows - scroll)
+        E.rowoff += scroll;
+      else
+        E.rowoff = E.numrows - 1;
+      if (E.cy == E.rowoff - scroll) {
+        for (int i = 0; i < scroll; i++)
+          movecursor(ARROW_DOWN);
+        E.rowoff += scroll;
       }
       if (E.cy <= 0)
         movecursor(ARROW_DOWN);
@@ -1337,11 +1346,11 @@ void nextWord(char key) {
         return;
       }
     } else {
-      while (cx < row->size && fptr(row->line[cx]))
+      while (cx < row->size && isWhitespace(row->line[cx]))
         cx++;
       while (cx < row->size && !fptr(row->line[cx]))
         cx++;
-      while (cx < row->size && fptr(row->line[cx]))
+      while (cx < row->size && isWhitespace(row->line[cx]))
         cx++;
     }
     if (cx < row->size) {
@@ -1353,7 +1362,7 @@ void nextWord(char key) {
       cy++;
       E.cx = cx;
       E.cy = cy;
-      while (isSepator(E.row[E.cy].line[E.cx]))
+      while (isWhitespace(E.row[E.cy].line[E.cx]))
         E.cx++;
       return;
     }
@@ -1362,7 +1371,7 @@ void nextWord(char key) {
   E.cy = E.numrows - 1;
 }
 
-void prevword(char key) {
+void prevWord(char key) {
   if (E.mode != 'n')
     return;
   int (*fptr)(int) = ((key == 'b') ? &isSepator : &isWhitespace);
@@ -1370,62 +1379,43 @@ void prevword(char key) {
   int cy = E.cy;
   while (cy >= 0) {
     struct erow *row = &E.row[cy];
-    printf("at cy=%d cx=%d char=%c\n", cy, cx, row->line[cx]);
-    fflush(stdout);
     if (fptr(row->line[cx])) {
-      while (cx > 0 && fptr(row->line[cx]))
+      while (cx >= 0 && fptr(row->line[cx]))
         cx--;
-      if (cx > 0) {
-        E.cx = cx;
+      while (cx >= 0 && !fptr(row->line[cx]))
+        cx--;
+      if (cx >= 0) {
+        E.cx = cx + 1;
         E.cy = cy;
         return;
       }
     } else {
-      while (cx > 0 && fptr(row->line[cx]))
+      while (cx > -1 && isWhitespace(row->line[cx]))
         cx--;
-      while (cx > 0 && !fptr(row->line[cx]))
+      while (cx > -1 && !fptr(row->line[cx]))
         cx--;
-      while (cx > 0 && fptr(row->line[cx]))
+      while (cx > -1 && isWhitespace(row->line[cx]))
         cx--;
     }
-    if (cx > 0) {
+    if (cx > -1) {
       E.cx = cx;
       E.cy = cy;
       return;
     } else {
-      cx = 0;
-      movecursor(ARROW_LEFT);
+      cy = ((cy > 0) ? cy - 1 : 0);
+      cx = E.row[cy].size - 1;
+      E.cx = cx;
+      E.cy = cy;
+      while (isWhitespace(E.row[E.cy].line[E.cx]))
+        E.cx--;
+      // if (isSepator(E.row[E.cy].line[E.cx + 1]))
+      //   E.cx++;
+      return;
     }
   }
-  E.cx = 0;
-  movecursor(ARROW_LEFT);
+  E.cx = E.row[0].size;
+  E.cy = 0;
 }
-
-// struct vimMotion parsevimcommand(char *cmd) {
-//   struct vimMotion vimCommand;
-//   vimCommand.command = '\0';
-//   vimCommand.motion = '\0';
-//   vimCommand.count = 1;
-//   if (!cmd || !*cmd)
-//     return vimCommand;
-//   if (strlen(cmd) == 1) {
-//     vimCommand.motion = cmd[0];
-//     return vimCommand;
-//   }
-//   if (isdigit(cmd[0])) {
-//     sscanf(cmd, "%d%c", &vimCommand.count, &vimCommand.motion);
-//     vimCommand.command = '\0';
-//     return vimCommand;
-//   }
-//   int matched = sscanf(cmd, "%c%d%c", &vimCommand.command, &vimCommand.count,
-//                        &vimCommand.motion);
-//   if (matched == 2) {
-//     vimCommand.motion = (char)vimCommand.count;
-//     vimCommand.count = 1;
-//   }
-//
-//   return vimCommand;
-// }
 
 // Vim motion directions
 void processmotion(int key) {
@@ -1451,7 +1441,7 @@ void processmotion(int key) {
     break;
   case 'b':
   case 'B':
-    prevword(key);
+    prevWord(key);
     break;
 
   case '0':
@@ -1464,40 +1454,6 @@ void processmotion(int key) {
     clearscreen();
   }
 }
-
-// void execute(int c) {
-//   char motionBuf[16];
-//   int len = 0;
-//
-//   motionBuf[len++] = c;
-//
-//   struct timespec start, now;
-//   clock_gettime(CLOCK_MONOTONIC, &start);
-//   while (len < 15) {
-//     clock_gettime(CLOCK_MONOTONIC, &now);
-//     long timeout = (now.tv_sec - start.tv_sec) * 1000 +
-//                    (now.tv_nsec - start.tv_nsec) / 1000000;
-//     if (timeout > 500)
-//       break;
-//
-//     int key = readkey();
-//     if (key != -1)
-//       motionBuf[len++] = key;
-//     if (strchr("hjklwWbBeEgG$0", c))
-//       break;
-//
-//     clock_gettime(CLOCK_MONOTONIC, &start);
-//   }
-//   motionBuf[len] = '\0';
-//
-//   struct vimMotion lmao = parsevimcommand(motionBuf);
-//   if (lmao.command) {
-//
-//   } else if (lmao.motion) {
-//     for (int i = 0; i < lmao.count; i++)
-//       processmotion(lmao.motion);
-//   }
-// }
 
 // proecess normal mode keypresses
 void processcommands() {
@@ -1570,12 +1526,30 @@ void processcommands() {
       E.cx = E.row[E.cy].size;
     E.mode = 'i';
     break;
+  case 'o':
+    E.cx = E.row[E.cy].size - 1;
+    movecursor(ARROW_RIGHT);
+    clearscreen();
+    E.mode = 'i';
+    insertnewline();
+    break;
+  case 'O':
+    movecursor(ARROW_LEFT);
+    E.cx = E.row[E.cy].size - 1;
+    movecursor(ARROW_RIGHT);
+    clearscreen();
+    E.mode = 'i';
+    insertnewline();
+    break;
 
   case 'h':
   case 'j':
   case 'k':
   case 'l':
   case 'w':
+  case 'W':
+  case 'b':
+  case 'B':
   case '0':
   case '$':
     processmotion(c);

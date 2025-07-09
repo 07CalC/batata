@@ -124,11 +124,12 @@ struct editor {
 struct editor E;
 
 char *C_EXTENSIONS[] = {".c", ".h", ".cpp", NULL};
-char *C_KEYWORDS[] = {"switch",    "if",      "while",   "for",    "break",
-                      "continue",  "return",  "else",    "struct", "union",
-                      "typedef",   "static",  "enum",    "class",  "case",
-                      "int|",      "long|",   "double|", "float|", "char|",
-                      "unsigned|", "signed|", "void|",   NULL};
+char *C_KEYWORDS[] = {"switch",    "if",      "while",   "for",      "break",
+                      "continue",  "return",  "else",    "struct",   "union",
+                      "typedef",   "static",  "enum",    "class",    "case",
+                      "int|",      "long|",   "double|", "float|",   "char|",
+                      "unsigned|", "signed|", "void|",   "include|", "define|",
+                      NULL};
 struct syntax HLDB[] = {
     {"//", "/*", "*/", "c", C_EXTENSIONS, C_KEYWORDS,
      HL_NUMBERS | HL_STRINGS | HL_SEPARATORS},
@@ -1547,6 +1548,28 @@ void toggleCase() {
   E.cx = MIN(E.cx + 1, E.row[E.cy].size - 1);
 }
 
+void increment() {
+  char changed;
+  char c = E.row[E.cy].line[E.cx];
+  if (isdigit(c) && c != '9')
+    changed = c + 1;
+  else
+    changed = c;
+  rowdeletechar(&E.row[E.cy], E.cx);
+  rowinsertchar(&E.row[E.cy], E.cx, changed);
+}
+
+void decrement() {
+  char changed;
+  char c = E.row[E.cy].line[E.cx];
+  if (isdigit(c) && c != '0')
+    changed = c - 1;
+  else
+    changed = c;
+  rowdeletechar(&E.row[E.cy], E.cx);
+  rowinsertchar(&E.row[E.cy], E.cx, changed);
+}
+
 void Normaldelete() {
   if (E.mode != 'n')
     return;
@@ -1683,7 +1706,7 @@ void processcommands() {
     break;
 
   case 'g':
-    Nromalgomove();
+    Normalgomove();
     break;
   case 'G':
     E.cy = E.numrows - 1;
@@ -1693,6 +1716,14 @@ void processcommands() {
 
   case '~':
     toggleCase();
+    break;
+
+  case CTRL_KEY('a'):
+    increment();
+    break;
+
+  case CTRL_KEY('x'):
+    decrement();
     break;
 
   case MOUSE_EVENT:

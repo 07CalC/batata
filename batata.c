@@ -759,6 +759,9 @@ void rowinsertchar(struct erow *row, int at, int c) {
   row->line[at] = c;
   updaterow(row);
   E.dirty = true;
+    if (!coalesce_state.active)
+    pushUndo(EDITINSERT, E.cy, E.cx);
+
 }
 
 void rowdeletechar(struct erow *row, int at) {
@@ -768,6 +771,13 @@ void rowdeletechar(struct erow *row, int at) {
   row->size--;
   updaterow(row);
   E.dirty = true;
+    if (!coalesce_state.active) {
+    if (E.cx > 0)
+      pushUndo(EDITDELETE, E.cy, E.cx - 1);
+    else
+      pushUndo(EDITDELETE, E.cy - 1, E.row[E.cy - 1].size);
+  }
+
 }
 
 void insertchar(int c) {
@@ -1368,7 +1378,7 @@ void handlemouse(int btn, int x, int y, char type) {
 }
 
 void nextWord(char key) {
-  if (E.mode != 'n')
+  if (E.mode == 'i')
     return;
   int (*fptr)(int) = ((key == 'w') ? &isSepator : &isWhitespace);
   int cx = E.cx;
@@ -1410,7 +1420,7 @@ void nextWord(char key) {
 }
 
 void prevWord(char key) {
-  if (E.mode != 'n')
+  if (E.mode == 'i')
     return;
   int (*fptr)(int) = ((key == 'b') ? &isSepator : &isWhitespace);
   int cx = E.cx;
@@ -1457,7 +1467,7 @@ void prevWord(char key) {
 
 // Vim motion directions
 void processmotion(int key) {
-  if (E.mode != 'n')
+  if (E.mode == 'i')
     return;
 
   switch (key) {
@@ -1497,7 +1507,17 @@ void processmotion(int key) {
   }
 }
 
-void highlightSelection() {}
+void deleteSelection() {
+    for (int i = 0; i < E.numrows; i++) {
+      struct erow *row = &E.row[i];
+      for (int j = row->size; j >= 0; j--) {
+        if (inSelection(j, i)) {
+          rowdeletechar(row, j);
+      }
+    }
+  }
+  E.mode = 'n';
+}
 
 void processSelection() {
   if (E.mode != 'v')
@@ -1557,6 +1577,10 @@ void processSelection() {
   case 'e':
   case 'E':
     processmotion(c);
+    break;
+
+  case 'd':
+    deleteSelection();
     break;
   }
 }

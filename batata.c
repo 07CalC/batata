@@ -1000,28 +1000,36 @@ void scroll() {
 }
 
 bool inSelection(int x, int y) {
-  int starty = MIN(E.sel_y, E.cy);
-  int endy = MAX(E.sel_y, E.cy);
+  // int lineNumGutter = (E.numrows > 0) ? (int)log10(E.numrows) + 1 : 1;
+  // x = x - 1 - (lineNumGutter + 1) + E.coloff;
+
+  int starty = E.sel_y;
+  int endy = E.cy;
+  int startx = E.sel_x;
+  int endx = E.cx;
+
+  if (starty > endy || (starty == endy && startx > endx)) {
+    int tmpy = starty;
+    int tmpx = startx;
+    starty = endy;
+    startx = endx;
+    endy = tmpy;
+    endx = tmpx;
+  }
 
   if (y < starty || y > endy)
     return false;
 
-  if (starty == endy) {
-    int startx = MIN(E.sel_x, E.cx);
-    int endx = MAX(E.sel_x, E.cx);
+  if (y == starty && y == endy)
     return x >= startx && x <= endx;
-  } else {
-    if (y == starty) {
-      int startx = (E.sel_y < E.cy) ? E.sel_x : E.cx;
-      return x >= startx;
-    } else if (y == endy) {
-      int endx = (E.sel_y < E.cy) ? E.cx : E.sel_x;
-      return x <= endx;
-    } else {
-      return true;
-    }
-  }
+  else if (y == starty)
+    return x >= startx;
+  else if (y == endy)
+    return x <= endx;
+  else
+    return true;
 }
+
 void drawrows(struct abuf *ab) {
   for (int y = 0; y < E.rows; y++) {
     int filerow = y + E.rowoff;
@@ -1098,24 +1106,27 @@ void drawrows(struct abuf *ab) {
             abAdd(ab, "\x1b[39m", 5);
             curColour = -1;
           }
+          if (E.mode == 'v' && inSelection(j, filerow))
+            abAdd(ab, "\x1b[100m", 6);
           abAdd(ab, &c[j], 1);
+          if (E.mode == 'v' && inSelection(j, filerow))
+            abAdd(ab, "\x1b[49m", 5);
         } else {
           int colour = syntocolour(hl[j]);
           if (curColour != colour) {
             curColour = colour;
             char buf[16];
-            if (E.mode == 'v' && inSelection(j, filerow)) {
-              int len = snprintf(buf, sizeof(buf), "\x1b[%d;100m", colour);
-              abAdd(ab, buf, len);
-            } else {
-              int clen = snprintf(buf, sizeof(buf), "\x1b[%d;49m", colour);
-              abAdd(ab, buf, clen);
-            }
+            int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", colour);
+            abAdd(ab, buf, clen);
           }
+          if (E.mode == 'v' && inSelection(j, filerow))
+            abAdd(ab, "\x1b[100m", 6);
           abAdd(ab, &c[j], 1);
+          if (E.mode == 'v' && inSelection(j, filerow))
+            abAdd(ab, "\x1b[49m", 6);
         }
       }
-      abAdd(ab, "\x1b[39m", 5);
+      abAdd(ab, "\x1b[39;49m", 8);
     }
 
     abAdd(ab, "\x1b[K", 3);
@@ -1179,6 +1190,7 @@ void setstatus(const char *format, ...) {
   vsnprintf(E.status, sizeof(E.status), format, arglist);
   va_end(arglist);
   E.statusmsg_time = time(NULL);
+  return;
 }
 
 char *editorprompt(char *prompt, void (*callback)(char *, int)) {
@@ -1485,12 +1497,42 @@ void processmotion(int key) {
   }
 }
 
+void highlightSelection() {}
+
 void processSelection() {
   if (E.mode != 'v')
     return;
 
   int c = readkey();
   switch (c) {
+  case CTRL_KEY('q'):
+    if (E.dirty) {
+      setstatus("Warning!! The file has unsaved changes, press 'y or Y' to "
+                "confirm and quit:");
+      clearscreen();
+      int c = readkey();
+      if (c != 'y' && c != 'Y') {
+        setstatus("Quitting Cancelled");
+        clearscreen();
+        break;
+      }
+    }
+    write(STDOUT_FILENO, "\x1b[2j", 4);
+    write(STDOUT_FILENO, "\x1b[H", 3);
+    exit(0);
+
+    break;
+  case CTRL_KEY('s'):
+    save();
+    break;
+  case CTRL_KEY('z'):
+    applyUndo();
+    break;
+  case CTRL_KEY('y'):
+    applyRedo();
+    break;
+    return;
+
   case '\x1b':
     E.mode = 'n';
     break;
@@ -1534,6 +1576,8 @@ void Normalgomove() {
   return;
 }
 
+void NormalDelete() {}
+
 void toggleCase() {
   char changed;
   char c = E.row[E.cy].line[E.cx];
@@ -1548,6 +1592,7 @@ void toggleCase() {
   E.cx = MIN(E.cx + 1, E.row[E.cy].size - 1);
 }
 
+// Ctrl-a
 void increment() {
   char changed;
   char c = E.row[E.cy].line[E.cx];
@@ -1559,6 +1604,7 @@ void increment() {
   rowinsertchar(&E.row[E.cy], E.cx, changed);
 }
 
+// Ctrl-x
 void decrement() {
   char changed;
   char c = E.row[E.cy].line[E.cx];
@@ -1635,7 +1681,7 @@ void processcommands() {
     break;
   case 'I':
     E.cx = 0;
-    while (isSepator(E.row[E.cy].line[E.cx]))
+    while (isWhitespace(E.row[E.cy].line[E.cx]))
       E.cx++;
     E.mode = 'i';
     break;
@@ -1665,7 +1711,7 @@ void processcommands() {
     break;
 
   case 'v':
-    E.sel_x = E.cx;
+    E.sel_x = E.rx;
     E.sel_y = E.cy;
     E.mode = 'v';
     break;

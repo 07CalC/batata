@@ -309,7 +309,8 @@ int windowsize(int *rows, int *cols) {
 }
 
 int isSepator(int c) {
-  return isspace(c) || c == '\0' || strchr(",.()+=/*=~%<>[];<>#-_", c) != NULL;
+  return isspace(c) || c == '\0' ||
+         strchr(",.()+=/*=~%<>[];<>#-_\n\r", c) != NULL;
 }
 
 int isWhitespace(int c) { return c == ' ' || c == '\t'; }
@@ -739,6 +740,7 @@ void editorFreeRow(struct erow *row) {
 }
 
 void editorDelRow(int at) {
+  pushUndo(EDITDELETE, at, 0);
   if (at < 0 || at >= E.numrows)
     return;
   editorFreeRow(&E.row[at]);
@@ -759,9 +761,8 @@ void rowinsertchar(struct erow *row, int at, int c) {
   row->line[at] = c;
   updaterow(row);
   E.dirty = true;
-    if (!coalesce_state.active)
+  if (!coalesce_state.active)
     pushUndo(EDITINSERT, E.cy, E.cx);
-
 }
 
 void rowdeletechar(struct erow *row, int at) {
@@ -771,13 +772,12 @@ void rowdeletechar(struct erow *row, int at) {
   row->size--;
   updaterow(row);
   E.dirty = true;
-    if (!coalesce_state.active) {
+  if (!coalesce_state.active) {
     if (E.cx > 0)
       pushUndo(EDITDELETE, E.cy, E.cx - 1);
     else
       pushUndo(EDITDELETE, E.cy - 1, E.row[E.cy - 1].size);
   }
-
 }
 
 void insertchar(int c) {
@@ -1465,6 +1465,65 @@ void prevWord(char key) {
   E.cy = 0;
 }
 
+void wordend(int key) {
+  if (E.mode == 'i')
+    return;
+  int (*fptr)(int) = ((key == 'e') ? &isSepator : &isWhitespace);
+  struct erow *row = &E.row[E.cy];
+  int stops[row->size];
+  memset(stops, 0, sizeof(stops));
+
+  // Store the index of the jump point in the next line
+  int i = E.cx;
+  int next = 0;
+  if (E.cy + 1 < E.numrows) {
+    while (i < row->size && isWhitespace(E.row[E.cy + 1].line[i]))
+      i++;
+    while (!fptr(E.row[E.cy + 1].line[i]))
+      i++;
+    if (!(isSepator(E.row[E.cy + 1].line[i]) &&
+          !isWhitespace(E.row[E.cy + 1].line[i])))
+      i--;
+  }
+  if (i != E.cx && i < row->size)
+    next = i;
+
+  // Mark all stopping points in stops
+
+  // Make it true after just storing a separator and use it to find the end of a
+  // word
+  bool encountered = true;
+  for (int i = row->size; i >= 0; i--) {
+    if ((fptr(row->line[i]) && !isWhitespace(row->line[i])) || (key != 'e')) {
+      stops[i] = 1;
+      encountered = true;
+    }
+    if (isWhitespace(row->line[i]))
+      encountered = true;
+    if (!fptr(row->line[i])) {
+      if (encountered) {
+        stops[i] = 1;
+        encountered = false;
+      }
+    }
+  }
+
+  // Find the next jump point
+  for (int i = E.cx; i < row->size; i++) {
+    if (stops[i] == 1) {
+      E.cx = i;
+      return;
+    }
+  }
+  E.cy++;
+  E.cx = next;
+
+  char *str = malloc(row->size + 1); // +1 for null terminator
+  for (int i = 0; i < row->size; i++)
+    str[i] = (char)stops[i];
+  setstatus(str);
+}
+
 // Vim motion directions
 void processmotion(int key) {
   if (E.mode == 'i')
@@ -1493,7 +1552,7 @@ void processmotion(int key) {
     break;
   case 'e':
   case 'E':
-    // wordend(key);
+    wordend(key);
     break;
 
   case '0':
@@ -1508,14 +1567,23 @@ void processmotion(int key) {
 }
 
 void deleteSelection() {
-    for (int i = 0; i < E.numrows; i++) {
-      struct erow *row = &E.row[i];
-      for (int j = row->size; j >= 0; j--) {
-        if (inSelection(j, i)) {
-          rowdeletechar(row, j);
+  for (int i = MIN(E.sel_y, E.cy); i <= MAX(E.cy, E.sel_y); i++)
+    pushUndo(EDITDELETE, i, -1);
+
+  for (int i = MIN(E.sel_y, E.cy); i <= MAX(E.sel_y, E.cy); i++) {
+    struct erow *row = &E.row[i];
+    for (int j = row->size; j >= 0; j--) {
+      if (inSelection(j, i)) {
+        rowdeletechar(row, j);
       }
     }
   }
+  for (int i = MAX(E.sel_y, E.cy); i >= MIN(E.sel_y, E.cy); i--) {
+    struct erow *row = &E.row[i];
+    if (row->size == 0)
+      editorDelRow(i);
+  }
+
   E.mode = 'n';
 }
 
@@ -1600,7 +1668,62 @@ void Normalgomove() {
   return;
 }
 
-void NormalDelete() {}
+void NormalDelete() {
+  int c = readkey();
+  int count = 1;
+  int motion = c;
+  if (isdigit(c) && c != '0') {
+    count = c - '0';
+    while (1) {
+      int k = readkey();
+      if (isdigit(k)) {
+        count = count * 10 + (k - '0');
+      } else {
+        motion = k;
+        break;
+      }
+    }
+  }
+  switch (motion) {
+  case 'd':
+    editorDelRow(E.cy);
+    break;
+  case '0': {
+    int idx = E.cx;
+    for (int i = 0; i < idx; i++)
+      deletechar();
+    break;
+  }
+  case '$': {
+    int times = E.row[E.cy].size - E.cx;
+    for (int i = 0; i < times; i++) {
+      movecursor(ARROW_RIGHT);
+      deletechar();
+    }
+    break;
+  }
+  case 'h':
+    for (int i = 0; i < count; i++)
+      deletechar();
+    break;
+  case 'l':
+    for (int i = 0; i < count; i++) {
+      movecursor(ARROW_RIGHT);
+      deletechar();
+    }
+    break;
+  case 'j':
+    for (int i = 0; i <= count; i++)
+      editorDelRow(E.cy);
+    break;
+  case 'k':
+    for (int i = 0; i <= count; i++) {
+      editorDelRow(E.cy);
+      movecursor(ARROW_UP);
+    }
+    break;
+  }
+}
 
 void toggleCase() {
   char changed;
@@ -1638,13 +1761,6 @@ void decrement() {
     changed = c;
   rowdeletechar(&E.row[E.cy], E.cx);
   rowinsertchar(&E.row[E.cy], E.cx, changed);
-}
-
-void Normaldelete() {
-  if (E.mode != 'n')
-    return;
-
-  char motion[16];
 }
 
 // proecess normal mode keypresses
@@ -1698,6 +1814,10 @@ void processcommands() {
 
   case CTRL_KEY('r'):
     applyRedo();
+    break;
+
+  case 'd':
+    NormalDelete();
     break;
 
   case 'i':

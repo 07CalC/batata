@@ -1913,6 +1913,7 @@ void processcommands() {
     decrement();
     break;
 
+  // Scroll down
   case CTRL_KEY('e'):
     if (E.rowoff == E.cy) {
       movecursor(ARROW_DOWN);
@@ -1920,6 +1921,8 @@ void processcommands() {
     } else
       E.rowoff++;
     break;
+
+  // Scroll up
   case CTRL_KEY('y'):
     if (E.rowoff >= 1)
       E.rowoff--;
@@ -1933,21 +1936,25 @@ void processcommands() {
       E.cy = E.numrows - 1;
     break;
 
+  // Scroll down a page
   case CTRL_KEY('b'):
     E.cy += E.rows - 1;
     E.cy = MIN(E.cy, E.numrows);
     break;
 
+  // Scroll up a page
   case CTRL_KEY('f'):
     E.cy -= E.rows - 1;
     E.cy = MAX(E.cy, 0);
     break;
 
+  // Scroll down half a page
   case CTRL_KEY('d'):
     E.cy -= (E.rows - 1) / 2;
     E.cy = MAX(E.cy, 0);
     break;
 
+  // Scroll up half a page
   case CTRL_KEY('u'):
     E.cy += (E.rows - 1) / 2;
     E.cy = MIN(E.cy, E.numrows);

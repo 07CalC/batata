@@ -1349,7 +1349,8 @@ void handlemouse(int btn, int x, int y, char type) {
       if (E.cy >= E.rowoff + E.rows)
         for (int i = 0; i < scroll; i++)
           movecursor(ARROW_UP);
-      E.rowoff -= scroll;
+      if (E.rowoff >= scroll)
+        E.rowoff -= scroll;
       if (E.cy < E.rowoff)
         E.cy = E.rowoff;
 
@@ -1792,10 +1793,6 @@ void processcommands() {
   case CTRL_KEY('z'):
     applyUndo();
     break;
-  case CTRL_KEY('y'):
-    applyRedo();
-    break;
-    return;
 
   case ARROW_LEFT:
   case ARROW_DOWN:
@@ -1916,6 +1913,46 @@ void processcommands() {
     decrement();
     break;
 
+  case CTRL_KEY('e'):
+    if (E.rowoff == E.cy) {
+      movecursor(ARROW_DOWN);
+      E.rowoff++;
+    } else
+      E.rowoff++;
+    break;
+  case CTRL_KEY('y'):
+    if (E.rowoff >= 1)
+      E.rowoff--;
+    else
+      E.rowoff = 0;
+    if (E.cy >= E.rowoff + E.rows)
+      movecursor(ARROW_UP);
+    if (E.cy < E.rowoff)
+      E.cy = E.rowoff;
+    if (E.cy >= E.numrows)
+      E.cy = E.numrows - 1;
+    break;
+
+  case CTRL_KEY('b'):
+    E.cy += E.rows - 1;
+    E.cy = MIN(E.cy, E.numrows);
+    break;
+
+  case CTRL_KEY('f'):
+    E.cy -= E.rows - 1;
+    E.cy = MAX(E.cy, 0);
+    break;
+
+  case CTRL_KEY('d'):
+    E.cy -= (E.rows - 1) / 2;
+    E.cy = MAX(E.cy, 0);
+    break;
+
+  case CTRL_KEY('u'):
+    E.cy += (E.rows - 1) / 2;
+    E.cy = MIN(E.cy, E.numrows);
+    break;
+
   case MOUSE_EVENT:
     clearscreen();
     break;
@@ -1969,7 +2006,7 @@ void processkey() {
     applyUndo();
     break;
 
-  case CTRL_KEY('y'):
+  case CTRL_KEY('r'):
     applyRedo();
     break;
 

@@ -1723,6 +1723,33 @@ void NormalDelete() {
       movecursor(ARROW_UP);
     }
     break;
+  case 'w':
+    for (int i = 0; i < count; i++) {
+      if (isWhitespace(E.row[E.cy].line[E.cx])) {
+        while (isWhitespace(E.row[E.cy].line[E.cx])) {
+          movecursor(ARROW_RIGHT);
+          deletechar();
+        }
+        continue;
+      } else if (isSepator(E.row[E.cy].line[E.cx])) {
+        movecursor(ARROW_RIGHT);
+        deletechar();
+        continue;
+      }
+
+      while (1) {
+        if (!(E.cy < E.numrows && E.cy >= 0 && E.cx < E.row[E.cx].size &&
+              E.cx >= 0))
+          break;
+        if (!isSepator(E.row[E.cy].line[E.cx])) {
+          movecursor(ARROW_RIGHT);
+          deletechar();
+        } else
+          break;
+      }
+      continue;
+    }
+    break;
   }
 }
 
@@ -1816,6 +1843,9 @@ void processcommands() {
   case 'd':
     NormalDelete();
     break;
+  case 'D':
+    editorDelRow(E.cy);
+    break;
 
   case 'i':
     E.mode = 'i';
@@ -1908,7 +1938,6 @@ void processcommands() {
   case CTRL_KEY('a'):
     increment();
     break;
-
   case CTRL_KEY('x'):
     decrement();
     break;
@@ -1941,13 +1970,11 @@ void processcommands() {
     E.cy += E.rows - 1;
     E.cy = MIN(E.cy, E.numrows);
     break;
-
   // Scroll up a page
   case CTRL_KEY('f'):
     E.cy -= E.rows - 1;
     E.cy = MAX(E.cy, 0);
     break;
-
   // Scroll down half a page
   case CTRL_KEY('d'):
     E.cy -= (E.rows - 1) / 2;

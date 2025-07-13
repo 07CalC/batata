@@ -1336,7 +1336,7 @@ void handlemouse(int btn, int x, int y, char type) {
     }
 
     case 2: {
-      // TODO: Right Click8
+      // TODO : Right Click8
       break;
     }
 
@@ -1584,7 +1584,8 @@ void deleteSelection() {
     if (row->size == 0)
       editorDelRow(i);
   }
-
+  E.cx = E.sel_y;
+  E.cx = E.sel_x;
   E.mode = 'n';
 }
 
@@ -1651,6 +1652,27 @@ void processSelection() {
   case 'd':
     deleteSelection();
     break;
+  case 'i': {
+    int k = readkey();
+    switch (k) {
+    case 'W':
+    case 'w': {
+      int (*fptr)(int) = ((k == 'w') ? &isSepator : &isWhitespace);
+      if (fptr(E.row[E.cx].line[E.cx])) {
+        return;
+      } else {
+        while (!fptr(E.row[E.sel_y].line[E.sel_x]))
+          E.sel_x--;
+        if (fptr(E.row[E.sel_y].line[E.sel_x]))
+          E.sel_x++;
+        while (!fptr(E.row[E.cy].line[E.cx]))
+          E.cx++;
+        if (fptr(E.row[E.cy].line[E.cx]))
+          E.cx--;
+      }
+    }
+    }
+  }
   }
 }
 
@@ -1669,8 +1691,12 @@ void Normalgomove() {
   return;
 }
 
-void NormalDelete() {
-  int c = readkey();
+void NormalDelete(char lmao) {
+  int c;
+  if (lmao != '\0')
+    c = lmao;
+  else
+    c = readkey();
   int count = 1;
   int motion = c;
   if (isdigit(c) && c != '0') {
@@ -1723,7 +1749,9 @@ void NormalDelete() {
       movecursor(ARROW_UP);
     }
     break;
-  case 'w':
+  case 'W':
+  case 'w': {
+    int (*fptr)(int) = ((motion == 'w') ? &isSepator : &isWhitespace);
     for (int i = 0; i < count; i++) {
       if (isWhitespace(E.row[E.cy].line[E.cx])) {
         while (isWhitespace(E.row[E.cy].line[E.cx])) {
@@ -1731,7 +1759,7 @@ void NormalDelete() {
           deletechar();
         }
         continue;
-      } else if (isSepator(E.row[E.cy].line[E.cx])) {
+      } else if (fptr(E.row[E.cy].line[E.cx])) {
         movecursor(ARROW_RIGHT);
         deletechar();
         continue;
@@ -1741,15 +1769,44 @@ void NormalDelete() {
         if (!(E.cy < E.numrows && E.cy >= 0 && E.cx < E.row[E.cx].size &&
               E.cx >= 0))
           break;
-        if (!isSepator(E.row[E.cy].line[E.cx])) {
+        if (!fptr(E.row[E.cy].line[E.cx])) {
           movecursor(ARROW_RIGHT);
           deletechar();
         } else
           break;
       }
+      while (isWhitespace(E.row[E.cy].line[E.cx])) {
+        movecursor(ARROW_RIGHT);
+        deletechar();
+      }
       continue;
     }
     break;
+  }
+  case 'i': {
+    int k = readkey();
+    switch (k) {
+    case 'W':
+    case 'w': {
+      E.sel_x = E.cx;
+      E.sel_y = E.cy;
+      int (*fptr)(int) = ((k == 'w') ? &isSepator : &isWhitespace);
+      if (fptr(E.row[E.cx].line[E.cx])) {
+        return;
+      } else {
+        while (!fptr(E.row[E.sel_y].line[E.sel_x]))
+          E.sel_x--;
+        if (fptr(E.row[E.sel_y].line[E.sel_x]))
+          E.sel_x++;
+        while (!fptr(E.row[E.cy].line[E.cx]))
+          E.cx++;
+        if (fptr(E.row[E.cy].line[E.cx]))
+          E.cx--;
+      }
+      deleteSelection();
+    }
+    }
+  }
   }
 }
 
@@ -1841,11 +1898,36 @@ void processcommands() {
     break;
 
   case 'd':
-    NormalDelete();
+    NormalDelete('\0');
     break;
   case 'D':
     editorDelRow(E.cy);
     break;
+  case 'c': {
+    int k = readkey();
+    switch (k) {
+    case 'c':
+      E.cx = E.row[E.cy].size;
+      while (E.cx > 0)
+        deletechar();
+      E.mode = 'i';
+      break;
+    default:
+      NormalDelete('i');
+      E.mode = 'i';
+      break;
+    }
+    break;
+  }
+  case 'C': {
+    int times = E.row[E.cy].size - E.cx;
+    for (int i = 0; i < times; i++) {
+      movecursor(ARROW_RIGHT);
+      deletechar();
+    }
+    E.mode = 'i';
+    break;
+  }
 
   case 'i':
     E.mode = 'i';

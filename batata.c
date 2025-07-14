@@ -1158,6 +1158,9 @@ void DrawStatusBar(struct abuf *ab) {
   case 'v':
     mode = "VISUAL";
     break;
+  case 'r':
+    mode = "REPLACE";
+    break;
   }
   char status[80], rstatus[80];
   int len = snprintf(status, sizeof(status), " [%s] %.20s - %d lines %s", mode,
@@ -1509,40 +1512,122 @@ void processmotion(int key) {
   if (E.mode == 'i')
     return;
 
-  switch (key) {
-  case 'h':
-    movecursor(ARROW_LEFT);
-    break;
-  case 'j':
-    movecursor(ARROW_DOWN);
-    break;
-  case 'k':
-    movecursor(ARROW_UP);
-    break;
-  case 'l':
-    movecursor(ARROW_RIGHT);
-    break;
-  case 'w':
-  case 'W':
-    nextWord(key);
-    break;
-  case 'b':
-  case 'B':
-    prevWord(key);
-    break;
-  case 'e':
-  case 'E':
-    wordend();
-    break;
+  int count = 0;
+  int motion = 0;
 
-  case '0':
-    E.cx = 0;
-    clearscreen();
-    break;
+  if (isdigit(key) && key != '0') {
+    count = key - '0';
+    while (1) {
+      int k = readkey();
+      if (isdigit(k)) {
+        count = count * 10 + (k - '0');
+      } else {
+        motion = k;
+        break;
+      }
+    }
+  } else {
+    count = 1;
+    motion = key;
+  }
 
-  case '$':
-    E.cx = E.row[E.cy].size - 1;
-    clearscreen();
+  for (int i = 0; i < count; i++) {
+    switch (motion) {
+    case 'h':
+      movecursor(ARROW_LEFT);
+      break;
+    case 'j':
+      movecursor(ARROW_DOWN);
+      break;
+    case 'k':
+      movecursor(ARROW_UP);
+      break;
+    case 'l':
+      movecursor(ARROW_RIGHT);
+      break;
+    case 'w':
+    case 'W':
+      nextWord(key);
+      break;
+    case 'b':
+    case 'B':
+      prevWord(key);
+      break;
+    case 'e':
+    case 'E':
+      wordend();
+      break;
+
+    case '0':
+      E.cx = 0;
+      clearscreen();
+      break;
+
+    case '$':
+      E.cx = E.row[E.cy].size - 1;
+      clearscreen();
+      break;
+    case 'f': {
+      int k = readkey();
+      int found = -1;
+      for (int i = E.cx + 1; i < E.row[E.cy].size; i++) {
+        if (E.row[E.cy].line[i] == k) {
+          found = i;
+          break;
+        }
+      }
+      if (found + 1)
+        E.cx = found;
+
+      break;
+    }
+    case 'F': {
+      int k = readkey();
+      if (E.cx <= 0)
+        return;
+      int found = -1;
+      for (int i = E.cx - 1; i >= 0; i--) {
+        if (E.row[E.cy].line[i] == k) {
+          found = i;
+          break;
+        }
+      }
+      if (found + 1)
+        E.cx = found;
+
+      break;
+    }
+    case 't': {
+      int k = readkey();
+      int found = -1;
+      for (int i = E.cx + 1; i < E.row[E.cy].size; i++) {
+        if (E.row[E.cy].line[i] == k) {
+          found = i;
+          break;
+        }
+      }
+      if (found > 0)
+        E.cx = found - 1;
+
+      break;
+    }
+    case 'T': {
+      int k = readkey();
+      if (E.cx <= 0)
+        return;
+      int found = -1;
+      for (int i = E.cx - 1; i < E.row[E.cy].size; i++) {
+        if (E.row[E.cy].line[i] == k) {
+          found = i;
+          break;
+        }
+      }
+      if (found > 0)
+        E.cx = found + 1;
+
+      break;
+    }
+    }
   }
 }
 
@@ -1568,13 +1653,28 @@ void deleteSelection() {
   E.mode = 'n';
 }
 
-bool openParen(int x, int y, int *outx, int *outy) {
+bool openParen(char match, int x, int y, int *outx, int *outy) {
+  char end = '\0';
+  switch (match) {
+  case '(':
+    end = ')';
+    break;
+  case '{':
+    end = '}';
+    break;
+  case '[':
+    end = ']';
+    break;
+  case '<':
+    end = '>';
+    break;
+  }
   int depth = 0;
   while (true) {
     char c = E.row[y].line[x];
-    if (c == ')')
+    if (c == end)
       depth++;
-    else if (c == '(') {
+    else if (c == match) {
       if (depth == 0) {
         *outx = x;
         *outy = y;
@@ -1592,14 +1692,29 @@ bool openParen(int x, int y, int *outx, int *outy) {
   }
 }
 
-bool matchingParen(int x, int y, int *outx, int *outy) {
+bool matchingParen(char match, int x, int y, int *outx, int *outy) {
+  char end = '\0';
+  switch (match) {
+  case '(':
+    end = ')';
+    break;
+  case '{':
+    end = '}';
+    break;
+  case '[':
+    end = ']';
+    break;
+  case '<':
+    end = '>';
+    break;
+  }
   int depth = 0;
   int len;
   while (true) {
     char c = E.row[y].line[x];
-    if (c == '(')
+    if (c == match)
       depth++;
-    else if (c == ')') {
+    else if (c == end) {
       depth--;
       if (depth == 0) {
         *outx = x;
@@ -1618,14 +1733,29 @@ bool matchingParen(int x, int y, int *outx, int *outy) {
   }
 }
 
-bool insideParens(int x, int y) {
+bool insideParens(char match, int x, int y) {
+  char end = '\0';
+  switch (match) {
+  case '(':
+    end = ')';
+    break;
+  case '{':
+    end = '}';
+    break;
+  case '[':
+    end = ']';
+    break;
+  case '<':
+    end = '>';
+    break;
+  }
   int tempx = x, tempy = y;
   while (tempx >= 0) {
-    if (E.row[tempy].line[tempx] == ')')
+    if (E.row[tempy].line[tempx] == end)
       return false;
-    if (E.row[tempy].line[tempx] == '(') {
+    if (E.row[tempy].line[tempx] == match) {
       int matchx, matchy;
-      if (matchingParen(tempx, tempy, &matchx, &matchy)) {
+      if (matchingParen(match, tempx, tempy, &matchx, &matchy)) {
         if ((matchy > y) || (matchy == y && matchx >= x))
           return true;
         else
@@ -1724,14 +1854,17 @@ void processSelection() {
       }
       break;
     }
+    case '{':
+    case '[':
+    case '<':
     case '(': {
       int x = E.cx, y = E.cy;
 
-      if (insideParens(x, y)) {
+      if (insideParens(k, x, y)) {
         int open_x, open_y, close_x, close_y;
-        if (!openParen(x, y, &open_x, &open_y))
+        if (!openParen(k, x, y, &open_x, &open_y))
           return;
-        if (!matchingParen(open_x, open_y, &close_x, &close_y))
+        if (!matchingParen(k, open_x, open_y, &close_x, &close_y))
           return;
         E.sel_x = open_x + 1;
         E.sel_y = open_y;
@@ -1744,7 +1877,7 @@ void processSelection() {
       for (int i = x; i < len; i++) {
         if (E.row[y].line[i] == '(') {
           int close_x, close_y;
-          if (!matchingParen(i, y, &close_x, &close_y))
+          if (!matchingParen(k, i, y, &close_x, &close_y))
             return;
           E.sel_x = i + 1;
           E.sel_y = y;
@@ -1891,39 +2024,63 @@ void NormalDelete(char lmao) {
       deleteSelection();
       break;
     }
+    case '{':
+    case '[':
+    case '<':
     case '(': {
       int x = E.cx, y = E.cy;
 
-      if (insideParens(x, y)) {
+      if (insideParens(k, x, y)) {
         int open_x, open_y, close_x, close_y;
-        if (!openParen(x, y, &open_x, &open_y))
+        if (!openParen(k, x, y, &open_x, &open_y))
           return;
-        if (!matchingParen(open_x, open_y, &close_x, &close_y))
+        if (!matchingParen(k, open_x, open_y, &close_x, &close_y))
           return;
         E.sel_x = open_x + 1;
         E.sel_y = open_y;
         E.cx = close_x - 1;
         E.cy = close_y;
         deleteSelection();
+        E.cx = E.sel_x;
+        E.cy = E.sel_y;
         return;
       }
 
       int len = strlen(E.row[y].line);
       for (int i = x; i < len; i++) {
-        if (E.row[y].line[i] == '(') {
+        if (E.row[y].line[i] == k) {
           int close_x, close_y;
-          if (!matchingParen(i, y, &close_x, &close_y))
+          if (!matchingParen(k, i, y, &close_x, &close_y))
             return;
           E.sel_x = i + 1;
           E.sel_y = y;
           E.cx = close_x - 1;
           E.cy = close_y;
           deleteSelection();
+          E.cx = E.sel_x;
+          E.cy = E.sel_y;
           return;
         }
       }
       break;
     }
+    }
+    break;
+  }
+  case 't': {
+    int k = readkey();
+    int found = -1;
+    for (int i = E.cx; i < E.row[E.cy].size; i++) {
+      if (E.row[E.cy].line[i] == k) {
+        found = i;
+        break;
+      }
+    }
+    if (found + 1) {
+      for (int i = E.cx; i < found; i++) {
+        movecursor(ARROW_RIGHT);
+        deletechar();
+      }
     }
   }
   }
@@ -2130,6 +2287,19 @@ void processcommands() {
   case '$':
   case 'e':
   case 'E':
+  case 'f':
+  case 'F':
+  case 't':
+  case 'T':
+  case '1':
+  case '2':
+  case '3':
+  case '4':
+  case '5':
+  case '6':
+  case '7':
+  case '8':
+  case '9':
     processmotion(c);
     break;
   case 'x':
@@ -2137,11 +2307,15 @@ void processcommands() {
     deletechar();
     break;
   case 'r':
+    // change cursor to underline
     write(STDOUT_FILENO, "\x1b[4 q", 5);
     int k = readkey();
     rowdeletechar(&E.row[E.cy], E.cx);
     rowinsertchar(&E.row[E.cy], E.cx, k);
     write(STDOUT_FILENO, "\x1b[6 q", 5);
+    break;
+  case 'R':
+    E.mode = 'r';
     break;
   case 's':
     write(STDOUT_FILENO, "\x1b[4 q", 5);
@@ -2224,6 +2398,27 @@ void processcommands() {
   }
 }
 
+void processReplacement() {
+  write(STDOUT_FILENO, "\x1b[4 q", 5);
+  int c = readkey();
+  switch (c) {
+  case '\x1b':
+    E.mode = 'n';
+    break;
+  case BACKSPACE:
+    movecursor(ARROW_LEFT);
+    break;
+  case DEL:
+    movecursor(ARROW_RIGHT);
+    deletechar();
+    break;
+  default:
+    rowdeletechar(&E.row[E.cy], E.cx);
+    rowinsertchar(&E.row[E.cy], E.cx, c);
+    E.cx++;
+  }
+}
+
 // Process insert mode keypresses
 void processkey() {
   if (E.mode != 'i') {
@@ -2232,6 +2427,9 @@ void processkey() {
       return;
     } else if (E.mode == 'v') {
       processSelection();
+      return;
+    } else if (E.mode == 'r') {
+      processReplacement();
       return;
     }
   }

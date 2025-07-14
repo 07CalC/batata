@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -1466,63 +1467,41 @@ void prevWord(char key) {
   E.cy = 0;
 }
 
-void wordend(int key) {
+void wordend() {
   if (E.mode == 'i')
     return;
-  int (*fptr)(int) = ((key == 'e') ? &isSepator : &isWhitespace);
+
   struct erow *row = &E.row[E.cy];
-  int stops[row->size];
-  memset(stops, 0, sizeof(stops));
+  int i = E.cx + 1;
 
-  // Store the index of the jump point in the next line
-  int i = E.cx;
-  int next = 0;
-  if (E.cy + 1 < E.numrows) {
-    while (i < row->size && isWhitespace(E.row[E.cy + 1].line[i]))
-      i++;
-    while (!fptr(E.row[E.cy + 1].line[i]))
-      i++;
-    if (!(isSepator(E.row[E.cy + 1].line[i]) &&
-          !isWhitespace(E.row[E.cy + 1].line[i])))
-      i--;
-  }
-  if (i != E.cx && i < row->size)
-    next = i;
+  while (i < row->size && isWhitespace(row->line[i]))
+    i++;
 
-  // Mark all stopping points in stops
-
-  // Make it true after just storing a separator and use it to find the end of a
-  // word
-  bool encountered = true;
-  for (int i = row->size; i >= 0; i--) {
-    if ((fptr(row->line[i]) && !isWhitespace(row->line[i])) || (key != 'e')) {
-      stops[i] = 1;
-      encountered = true;
+  if (i >= row->size) {
+    if (E.cy + 1 < E.numrows) {
+      E.cy++;
+      E.cx = 0;
     }
-    if (isWhitespace(row->line[i]))
-      encountered = true;
-    if (!fptr(row->line[i])) {
-      if (encountered) {
-        stops[i] = 1;
-        encountered = false;
-      }
-    }
+    return;
   }
 
-  // Find the next jump point
-  for (int i = E.cx; i < row->size; i++) {
-    if (stops[i] == 1) {
-      E.cx = i;
-      return;
-    }
-  }
-  E.cy++;
-  E.cx = next;
+  bool in_separator = isSepator(row->line[i]);
 
-  char *str = malloc(row->size + 1); // +1 for null terminator
-  for (int i = 0; i < row->size; i++)
-    str[i] = (char)stops[i];
-  setstatus(str);
+  while (i < row->size) {
+    char c = row->line[i];
+    if (isWhitespace(c))
+      break;
+    if (in_separator && !isSepator(c))
+      break;
+    if (!in_separator && isSepator(c))
+      break;
+    i++;
+  }
+
+  if (i > 0)
+    i--;
+
+  E.cx = i;
 }
 
 // Vim motion directions
@@ -1553,7 +1532,7 @@ void processmotion(int key) {
     break;
   case 'e':
   case 'E':
-    wordend(key);
+    wordend();
     break;
 
   case '0':
@@ -1587,6 +1566,75 @@ void deleteSelection() {
   E.cx = E.sel_y;
   E.cx = E.sel_x;
   E.mode = 'n';
+}
+
+bool openParen(int x, int y, int *outx, int *outy) {
+  int depth = 0;
+  while (true) {
+    char c = E.row[y].line[x];
+    if (c == ')')
+      depth++;
+    else if (c == '(') {
+      if (depth == 0) {
+        *outx = x;
+        *outy = y;
+        return true;
+      } else {
+        depth--;
+      }
+    }
+
+    if (--x < 0) {
+      if (--y < 0)
+        return false;
+      x = strlen(E.row[y].line) - 1;
+    }
+  }
+}
+
+bool matchingParen(int x, int y, int *outx, int *outy) {
+  int depth = 0;
+  int len;
+  while (true) {
+    char c = E.row[y].line[x];
+    if (c == '(')
+      depth++;
+    else if (c == ')') {
+      depth--;
+      if (depth == 0) {
+        *outx = x;
+        *outy = y;
+        return true;
+      }
+    }
+
+    x++;
+    len = strlen(E.row[y].line);
+    if (x >= len) {
+      x = 0;
+      if (++y >= E.numrows)
+        return false;
+    }
+  }
+}
+
+bool insideParens(int x, int y) {
+  int tempx = x, tempy = y;
+  while (tempx >= 0) {
+    if (E.row[tempy].line[tempx] == ')')
+      return false;
+    if (E.row[tempy].line[tempx] == '(') {
+      int matchx, matchy;
+      if (matchingParen(tempx, tempy, &matchx, &matchy)) {
+        if ((matchy > y) || (matchy == y && matchx >= x))
+          return true;
+        else
+          return false;
+      }
+    }
+    tempx--;
+  }
+  return false;
 }
 
 void processSelection() {
@@ -1652,6 +1700,10 @@ void processSelection() {
   case 'd':
     deleteSelection();
     break;
+  case 'c':
+    deleteSelection();
+    E.mode = 'i';
+    break;
   case 'i': {
     int k = readkey();
     switch (k) {
@@ -1670,6 +1722,38 @@ void processSelection() {
         if (fptr(E.row[E.cy].line[E.cx]))
           E.cx--;
       }
+      break;
+    }
+    case '(': {
+      int x = E.cx, y = E.cy;
+
+      if (insideParens(x, y)) {
+        int open_x, open_y, close_x, close_y;
+        if (!openParen(x, y, &open_x, &open_y))
+          return;
+        if (!matchingParen(open_x, open_y, &close_x, &close_y))
+          return;
+        E.sel_x = open_x + 1;
+        E.sel_y = open_y;
+        E.cx = close_x - 1;
+        E.cy = close_y;
+        return;
+      }
+
+      int len = strlen(E.row[y].line);
+      for (int i = x; i < len; i++) {
+        if (E.row[y].line[i] == '(') {
+          int close_x, close_y;
+          if (!matchingParen(i, y, &close_x, &close_y))
+            return;
+          E.sel_x = i + 1;
+          E.sel_y = y;
+          E.cx = close_x - 1;
+          E.cy = close_y;
+          return;
+        }
+      }
+      return;
     }
     }
   }
@@ -1783,6 +1867,7 @@ void NormalDelete(char lmao) {
     }
     break;
   }
+
   case 'i': {
     int k = readkey();
     switch (k) {
@@ -1804,6 +1889,40 @@ void NormalDelete(char lmao) {
           E.cx--;
       }
       deleteSelection();
+      break;
+    }
+    case '(': {
+      int x = E.cx, y = E.cy;
+
+      if (insideParens(x, y)) {
+        int open_x, open_y, close_x, close_y;
+        if (!openParen(x, y, &open_x, &open_y))
+          return;
+        if (!matchingParen(open_x, open_y, &close_x, &close_y))
+          return;
+        E.sel_x = open_x + 1;
+        E.sel_y = open_y;
+        E.cx = close_x - 1;
+        E.cy = close_y;
+        deleteSelection();
+        return;
+      }
+
+      int len = strlen(E.row[y].line);
+      for (int i = x; i < len; i++) {
+        if (E.row[y].line[i] == '(') {
+          int close_x, close_y;
+          if (!matchingParen(i, y, &close_x, &close_y))
+            return;
+          E.sel_x = i + 1;
+          E.sel_y = y;
+          E.cx = close_x - 1;
+          E.cy = close_y;
+          deleteSelection();
+          return;
+        }
+      }
+      break;
     }
     }
   }
@@ -1913,7 +2032,7 @@ void processcommands() {
       E.mode = 'i';
       break;
     default:
-      NormalDelete('i');
+      NormalDelete(k);
       E.mode = 'i';
       break;
     }

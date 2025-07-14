@@ -1944,7 +1944,7 @@ void toggleCase() {
 }
 
 // Ctrl-a
-void increment() {
+void incrementOrDecrement(char c) {
   // Detetct the entire word you are in
   E.sel_x = E.cx;
   E.sel_y = E.cy;
@@ -1976,55 +1976,12 @@ void increment() {
   int num = (int)strtol(buf, &endptr, 10);
   free(buf);
 
-  num += 1;
-  char bufn[32];
-  snprintf(bufn, sizeof(bufn), "%d", num);
-  len = strlen(bufn);
-  bufn[len] = '\0';
-
-  // deleteSelection();
-  movecursor(ARROW_RIGHT);
-  for (int i = E.cx; i > E.sel_x; i--)
-    deletechar();
-  for (int i = 0; i < len; i++) {
-    insertchar(bufn[i]);
-  }
-  E.cx--;
-}
-
-void decrement() {
-  // Detetct the entire word you are in
-  E.sel_x = E.cx;
-  E.sel_y = E.cy;
-  if (isSepator(E.row[E.cy].line[E.cx])) {
+  if (c == 'i')
+    num += 1;
+  else if (c == 'd')
+    num -= 1;
+  else
     return;
-  } else {
-    while (E.sel_x > 0 && isdigit(E.row[E.sel_y].line[E.sel_x - 1]))
-      E.sel_x--;
-    if (!isdigit(E.row[E.sel_y].line[E.sel_x]))
-      E.sel_x++;
-    if (E.sel_x > 0 && E.row[E.sel_y].line[E.sel_x - 1] == '-')
-      E.sel_x--;
-    while (E.cx < E.row[E.cy].size && isdigit(E.row[E.cy].line[E.cx]))
-      E.cx++;
-    if (E.cx > 0 && !isdigit(E.row[E.cy].line[E.cx]))
-      E.cx--;
-  }
-  int len = E.cx - E.sel_x + 1;
-  char *buf = (char *)malloc(len + 1);
-  if (!buf) {
-    kill("Malloc");
-    return;
-  }
-  strncpy(buf, &E.row[E.sel_y].line[E.sel_x], len);
-  buf[len] = '\0';
-
-  // convert to int
-  char *endptr;
-  int num = (int)strtol(buf, &endptr, 10);
-  free(buf);
-
-  num -= 1;
   char bufn[32];
   snprintf(bufn, sizeof(bufn), "%d", num);
   len = strlen(bufn);
@@ -2210,10 +2167,10 @@ void processcommands() {
     break;
 
   case CTRL_KEY('a'):
-    increment();
+    incrementOrDecrement('i');
     break;
   case CTRL_KEY('x'):
-    decrement();
+    incrementOrDecrement('d');
     break;
 
   // Scroll down

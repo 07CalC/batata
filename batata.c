@@ -1876,7 +1876,7 @@ void NormalDelete(char lmao) {
       E.sel_x = E.cx;
       E.sel_y = E.cy;
       int (*fptr)(int) = ((k == 'w') ? &isSepator : &isWhitespace);
-      if (fptr(E.row[E.cx].line[E.cx])) {
+      if (fptr(E.row[E.cy].line[E.cx])) {
         return;
       } else {
         while (!fptr(E.row[E.sel_y].line[E.sel_x]))
@@ -1945,26 +1945,99 @@ void toggleCase() {
 
 // Ctrl-a
 void increment() {
-  char changed;
-  char c = E.row[E.cy].line[E.cx];
-  if (isdigit(c) && c != '9')
-    changed = c + 1;
-  else
-    changed = c;
-  rowdeletechar(&E.row[E.cy], E.cx);
-  rowinsertchar(&E.row[E.cy], E.cx, changed);
+  // Detetct the entire word you are in
+  E.sel_x = E.cx;
+  E.sel_y = E.cy;
+  if (isSepator(E.row[E.cy].line[E.cx])) {
+    return;
+  } else {
+    while (E.sel_x > 0 && isdigit(E.row[E.sel_y].line[E.sel_x - 1]))
+      E.sel_x--;
+    if (!isdigit(E.row[E.sel_y].line[E.sel_x]))
+      E.sel_x++;
+    if (E.sel_x > 0 && E.row[E.sel_y].line[E.sel_x - 1] == '-')
+      E.sel_x--;
+    while (E.cx < E.row[E.cy].size && isdigit(E.row[E.cy].line[E.cx]))
+      E.cx++;
+    if (E.cx > 0 && !isdigit(E.row[E.cy].line[E.cx]))
+      E.cx--;
+  }
+  int len = E.cx - E.sel_x + 1;
+  char *buf = (char *)malloc(len + 1);
+  if (!buf) {
+    kill("Malloc");
+    return;
+  }
+  strncpy(buf, &E.row[E.sel_y].line[E.sel_x], len);
+  buf[len] = '\0';
+
+  // convert to int
+  char *endptr;
+  int num = (int)strtol(buf, &endptr, 10);
+  free(buf);
+
+  num += 1;
+  char bufn[32];
+  snprintf(bufn, sizeof(bufn), "%d", num);
+  len = strlen(bufn);
+  bufn[len] = '\0';
+
+  // deleteSelection();
+  movecursor(ARROW_RIGHT);
+  for (int i = E.cx; i > E.sel_x; i--)
+    deletechar();
+  for (int i = 0; i < len; i++) {
+    insertchar(bufn[i]);
+  }
+  E.cx--;
 }
 
-// Ctrl-x
 void decrement() {
-  char changed;
-  char c = E.row[E.cy].line[E.cx];
-  if (isdigit(c) && c != '0')
-    changed = c - 1;
-  else
-    changed = c;
-  rowdeletechar(&E.row[E.cy], E.cx);
-  rowinsertchar(&E.row[E.cy], E.cx, changed);
+  // Detetct the entire word you are in
+  E.sel_x = E.cx;
+  E.sel_y = E.cy;
+  if (isSepator(E.row[E.cy].line[E.cx])) {
+    return;
+  } else {
+    while (E.sel_x > 0 && isdigit(E.row[E.sel_y].line[E.sel_x - 1]))
+      E.sel_x--;
+    if (!isdigit(E.row[E.sel_y].line[E.sel_x]))
+      E.sel_x++;
+    if (E.sel_x > 0 && E.row[E.sel_y].line[E.sel_x - 1] == '-')
+      E.sel_x--;
+    while (E.cx < E.row[E.cy].size && isdigit(E.row[E.cy].line[E.cx]))
+      E.cx++;
+    if (E.cx > 0 && !isdigit(E.row[E.cy].line[E.cx]))
+      E.cx--;
+  }
+  int len = E.cx - E.sel_x + 1;
+  char *buf = (char *)malloc(len + 1);
+  if (!buf) {
+    kill("Malloc");
+    return;
+  }
+  strncpy(buf, &E.row[E.sel_y].line[E.sel_x], len);
+  buf[len] = '\0';
+
+  // convert to int
+  char *endptr;
+  int num = (int)strtol(buf, &endptr, 10);
+  free(buf);
+
+  num -= 1;
+  char bufn[32];
+  snprintf(bufn, sizeof(bufn), "%d", num);
+  len = strlen(bufn);
+  bufn[len] = '\0';
+
+  // deleteSelection();
+  movecursor(ARROW_RIGHT);
+  for (int i = E.cx; i > E.sel_x; i--)
+    deletechar();
+  for (int i = 0; i < len; i++) {
+    insertchar(bufn[i]);
+  }
+  E.cx--;
 }
 
 // proecess normal mode keypresses

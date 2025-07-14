@@ -28,8 +28,9 @@
 #define editor_version "0.0.3"
 
 // Defaults to be ovverwritten by .batatarc
-int TAB_LENGTH = 4;
-int RELATIVE_LINE_NUMBERS = 0;
+int TAB_LENGTH = 2;
+// Set to 1 for reltive line numbers 0 for classic in .batatarc
+int RELATIVE_LINE_NUMBERS = 1;
 int UNDO_STACK_SIZE = 100;
 
 enum keys {
@@ -141,6 +142,7 @@ void setstatus(const char *format, ...);
 void clearscreen();
 char *editorprompt(char *prompt, void (*callback)(char *, int));
 void handlemouse(int btn, int x, int y, char type);
+bool matchingParen(char match, int x, int y, int *outx, int *outy);
 
 void kill(const char *s) {
   write(STDOUT_FILENO, "\x1b[2J", 4);
@@ -791,6 +793,19 @@ void insertchar(int c) {
 }
 
 void insertnewline() {
+  int tabs = 0;
+  int i = 0;
+  while (isWhitespace(E.row[E.cy].line[i])) {
+    tabs++;
+    i++;
+  }
+  for (; i < E.row[E.cy].size; i++) {
+    if (E.row[E.cy].line[i] == '{')
+      tabs += TAB_LENGTH;
+    else if (E.row[E.cy].line[i] == '}')
+      tabs -= TAB_LENGTH;
+  }
+  tabs /= TAB_LENGTH;
   if (E.cx == 0) {
     editorInsertRow(E.cy, "", 0);
   } else {
@@ -803,6 +818,9 @@ void insertnewline() {
   }
   E.cy++;
   E.cx = 0;
+  while (tabs--) {
+    insertchar('\t');
+  }
 }
 
 void rowinsertstring(struct erow *row, char *s, size_t len) {
@@ -1627,6 +1645,87 @@ void processmotion(int key) {
 
       break;
     }
+    case '^':
+      E.cx = 0;
+      while (isWhitespace(E.row[E.cy].line[E.cx]))
+        E.cx++;
+      break;
+
+    case '%': {
+      char currentChar = E.row[E.cy].line[E.cx];
+      int matchX = -1, matchY = -1;
+      if (currentChar == '(' || currentChar == '{' || currentChar == '[' ||
+          currentChar == '<') {
+        if (matchingParen(currentChar, E.cx, E.cy, &matchX, &matchY)) {
+          E.cx = matchX;
+          E.cy = matchY;
+        }
+      } else if (currentChar == ')' || currentChar == '}' ||
+                 currentChar == ']' || currentChar == '>') {
+        char match;
+        switch (currentChar) {
+        case ')':
+          match = '(';
+          break;
+        case '}':
+          match = '{';
+          break;
+        case ']':
+          match = '[';
+          break;
+        case '>':
+          match = '<';
+          break;
+        default:
+          match = '\0';
+          break;
+        }
+        if (match != '\0') {
+          int depth = 1;
+          int x = E.cx - 1;
+          int y = E.cy;
+          while (y >= 0) {
+            while (x >= 0) {
+              char c = E.row[y].line[x];
+              if (c == currentChar) {
+                depth++;
+              } else if (c == match) {
+                depth--;
+                if (depth == 0) {
+                  matchX = x;
+                  matchY = y;
+                  goto foundMatch;
+                }
+              }
+              x--;
+            }
+            y--;
+            if (y >= 0)
+              x = strlen(E.row[y].line) - 1;
+          }
+        foundMatch:
+          if (matchX != -1 && matchY != -1) {
+            E.cx = matchX;
+            E.cy = matchY;
+          }
+        }
+      }
+      break;
+    }
+      // Move to top of the screen
+    case 'H':
+      E.cy = E.rowoff;
+      break;
+
+    // Middle of the screen
+    case 'M':
+      E.cy = E.rowoff + (E.rows - 1) / 2;
+      break;
+
+    // Bottom of the screen
+    case 'L':
+      E.cy = E.rowoff + E.rows - 1;
+      break;
     }
   }
 }
@@ -1812,21 +1911,6 @@ void processSelection() {
     movecursor(c);
     break;
 
-  case 'h':
-  case 'j':
-  case 'k':
-  case 'l':
-  case 'w':
-  case 'W':
-  case 'b':
-  case 'B':
-  case '0':
-  case '$':
-  case 'e':
-  case 'E':
-    processmotion(c);
-    break;
-
   case 'd':
     deleteSelection();
     break;
@@ -1889,7 +1973,11 @@ void processSelection() {
       return;
     }
     }
+    break;
   }
+  default:
+    processmotion(c);
+    break;
   }
 }
 
@@ -2275,33 +2363,6 @@ void processcommands() {
     E.mode = 'v';
     break;
 
-  case 'h':
-  case 'j':
-  case 'k':
-  case 'l':
-  case 'w':
-  case 'W':
-  case 'b':
-  case 'B':
-  case '0':
-  case '$':
-  case 'e':
-  case 'E':
-  case 'f':
-  case 'F':
-  case 't':
-  case 'T':
-  case '1':
-  case '2':
-  case '3':
-  case '4':
-  case '5':
-  case '6':
-  case '7':
-  case '8':
-  case '9':
-    processmotion(c);
-    break;
   case 'x':
     movecursor(ARROW_RIGHT);
     deletechar();
@@ -2375,11 +2436,13 @@ void processcommands() {
     E.cy += E.rows - 1;
     E.cy = MIN(E.cy, E.numrows);
     break;
+
   // Scroll up a page
   case CTRL_KEY('f'):
     E.cy -= E.rows - 1;
     E.cy = MAX(E.cy, 0);
     break;
+
   // Scroll down half a page
   case CTRL_KEY('d'):
     E.cy -= (E.rows - 1) / 2;
@@ -2395,6 +2458,9 @@ void processcommands() {
   case MOUSE_EVENT:
     clearscreen();
     break;
+
+  default:
+    processmotion(c);
   }
 }
 

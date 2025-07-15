@@ -28,10 +28,12 @@
 #define editor_version "0.0.3"
 
 // Defaults to be ovverwritten by .batatarc
-int TAB_LENGTH = 2;
-// Set to 1 for reltive line numbers 0 for classic in .batatarc
+int TAB_LENGTH =
+    2; // Set to 1 for reltive line numbers 0 for classic in .batatarc
 int RELATIVE_LINE_NUMBERS = 1;
 int UNDO_STACK_SIZE = 100;
+int AUTO_COMPLETION = 1;
+int DUMB = 0; // Only allow insert mode
 
 enum keys {
   BACKSPACE = 127,
@@ -76,6 +78,8 @@ struct syntax {
   char *singleCommentStart;
   char *multicommentstart;
   char *multicommentend;
+  char *IndentStart;
+  char *IndentEnd;
   char *ftype;
   char **fmatch;
   char **keywords;
@@ -132,8 +136,80 @@ char *C_KEYWORDS[] = {"switch",    "if",      "while",   "for",      "break",
                       "int|",      "long|",   "double|", "float|",   "char|",
                       "unsigned|", "signed|", "void|",   "include|", "define|",
                       NULL};
+
+char *PYTHON_EXTENSIONS[] = {".py", "ipynb", NULL};
+char *PYTHON_KEYWORDS[] = {
+    "def",    "return",  "if",       "elif",     "else",   "while",  "for",
+    "in",     "break",   "continue", "import",   "from",   "class",  "try",
+    "except", "finally", "raise",    "with",     "as",     "assert", "lambda",
+    "yield",  "pass",    "global",   "nonlocal", "del",    "True|",  "False|",
+    "None|",  "int|",    "str|",     "bool|",    "float|", "list|",  "dict|",
+    "set|",   "tuple|",  NULL};
+
+char *RUST_EXTENSIONS[] = {".rs", NULL};
+char *RUST_KEYWORDS[] = {
+    "fn",      "let",     "mut",     "if",    "else",     "match",  "loop",
+    "while",   "for",     "in",      "break", "continue", "return", "struct",
+    "enum",    "impl",    "trait",   "mod",   "use",      "pub",    "crate",
+    "super",   "self",    "Self",    "ref",   "as",       "const",  "static",
+    "dyn",     "move",    "unsafe",  "async", "await",    "Box|",   "Vec|",
+    "String|", "Result|", "Option|", NULL};
+
+char *JS_EXTENSIONS[] = {".js", ".mjs", ".cjs", NULL};
+char *JS_KEYWORDS[] = {
+    "function", "return",   "var",        "let",        "const",   "if",
+    "else",     "for",      "while",      "do",         "switch",  "case",
+    "break",    "continue", "try",        "catch",      "finally", "throw",
+    "class",    "new",      "this",       "super",      "import",  "export",
+    "default",  "typeof",   "instanceof", "undefined|", "null|",   "true|",
+    "false|",   "Array|",   "Object|",    "Promise|",   NULL};
+
+char *TS_EXTENSIONS[] = {".ts", ".tsx", NULL};
+char *TS_KEYWORDS[] = {
+    "interface", "type",     "enum",     "implements", "extends",  "readonly",
+    "namespace", "abstract", "declare",  "any|",       "unknown|", "never|",
+    "string|",   "number|",  "boolean|", "void|",      NULL};
+
+char *LUA_EXTENSIONS[] = {".lua", NULL};
+char *LUA_KEYWORDS[] = {
+    "function", "end",    "if",    "then",  "elseif", "else",  "for",  "in",
+    "while",    "repeat", "until", "break", "return", "local", "nil|", "true|",
+    "false|",   "do",     "not",   "and",   "or",     NULL};
+
+char *GO_EXTENSIONS[] = {".go", NULL};
+char *GO_KEYWORDS[] = {
+    "func",  "var",    "const",   "import",    "package", "return", "if",
+    "else",  "switch", "case",    "for",       "range",   "break",  "continue",
+    "go",    "defer",  "struct",  "interface", "type",    "map|",   "chan|",
+    "bool|", "int|",   "string|", "float64|",  "error|",  "nil|",   NULL};
+
 struct syntax HLDB[] = {
-    {"//", "/*", "*/", "c", C_EXTENSIONS, C_KEYWORDS,
+    // C/C++
+    {"//", "/*", "*/", "{", "}", "c", C_EXTENSIONS, C_KEYWORDS,
+     HL_NUMBERS | HL_STRINGS | HL_SEPARATORS},
+
+    // Python
+    {"#", NULL, NULL, ":", NULL, "python", PYTHON_EXTENSIONS, PYTHON_KEYWORDS,
+     HL_NUMBERS | HL_STRINGS},
+
+    // Rust
+    {"//", "/*", "*/", "{", "}", "rust", RUST_EXTENSIONS, RUST_KEYWORDS,
+     HL_NUMBERS | HL_STRINGS | HL_SEPARATORS},
+
+    // JavaScript
+    {"//", "/*", "*/", "{", "}", "javascript", JS_EXTENSIONS, JS_KEYWORDS,
+     HL_NUMBERS | HL_STRINGS | HL_SEPARATORS},
+
+    // TypeScript
+    {"//", "/*", "*/", "{", "}", "typescript", TS_EXTENSIONS, TS_KEYWORDS,
+     HL_NUMBERS | HL_STRINGS | HL_SEPARATORS},
+
+    // Lua
+    {"--", "--[[", "]]", NULL, NULL, "lua", LUA_EXTENSIONS, LUA_KEYWORDS,
+     HL_NUMBERS | HL_STRINGS},
+
+    // Go
+    {"//", "/*", "*/", "{", "}", "go", GO_EXTENSIONS, GO_KEYWORDS,
      HL_NUMBERS | HL_STRINGS | HL_SEPARATORS},
 };
 
@@ -468,10 +544,12 @@ void selectHL() {
   if (E.filename == NULL)
     return;
 
-  char *ex = strchr(E.filename, '.');
-  for (int j = 0; (long unsigned int)j < (HLDB_SIZE); j++) {
+  char *ex = strrchr(E.filename, '.');
+  for (int j = 0; (unsigned long int)j < (HLDB_SIZE); j++) {
     struct syntax *s = &HLDB[j];
     int i = 0;
+    if (!s->fmatch)
+      continue;
     while (s->fmatch[i]) {
       bool verified = (s->fmatch[i][0] == '.');
       if ((verified && ex && !strcmp(ex, s->fmatch[i])) ||
@@ -715,7 +793,10 @@ void updaterow(struct erow *row) {
 void editorInsertRow(int at, char *s, size_t len) {
   if (at < 0 || at > E.numrows)
     return;
-  E.row = realloc(E.row, sizeof(struct erow) * (E.numrows + 1));
+  struct erow *new = realloc(E.row, sizeof(struct erow) * (E.numrows + 1));
+  if (!new)
+    kill("realloc");
+  E.row = new;
   memmove(&E.row[at + 1], &E.row[at], sizeof(struct erow) * (E.numrows - at));
   for (int i = at + 1; i <= E.numrows; i++)
     E.row[i].idx++;
@@ -786,41 +867,118 @@ void rowdeletechar(struct erow *row, int at) {
 void insertchar(int c) {
   if (!coalesce_state.active)
     pushUndo(EDITINSERT, E.cy, E.cx);
+
   if (E.cy == E.numrows)
     editorInsertRow(E.numrows, "", 0);
+
+  if (c == ')' || c == ']' || c == '}' || c == '"' || c == '\'') {
+    struct erow *row = &E.row[E.cy];
+    if (E.cx < row->size && row->line[E.cx] == c) {
+      E.cx++;
+      return;
+    }
+  }
+
   rowinsertchar(&E.row[E.cy], E.cx, c);
   E.cx++;
+
+  switch (c) {
+  case '(':
+    rowinsertchar(&E.row[E.cy], E.cx, ')');
+    break;
+  case '[':
+    rowinsertchar(&E.row[E.cy], E.cx, ']');
+    break;
+  case '{':
+    rowinsertchar(&E.row[E.cy], E.cx, '}');
+    break;
+  case '"':
+    rowinsertchar(&E.row[E.cy], E.cx, '"');
+    break;
+  case '\'':
+    rowinsertchar(&E.row[E.cy], E.cx, '\'');
+    break;
+  default:
+    return;
+  }
+  // E.cx--;
 }
 
 void insertnewline() {
-  int tabs = 0;
+  if (E.numrows == 0) {
+    editorInsertRow(0, "", 0);
+    E.cy = 0;
+    E.cx = 0;
+  }
+  if (E.cy < 0 || E.cy >= E.numrows)
+    return;
+
+  struct erow *row = &E.row[E.cy];
+
+  if (E.cx < 0)
+    E.cx = 0;
+  if (E.cx > row->size)
+    E.cx = row->size;
+
+  updaterow(row);
+
+  int spaces = 0;
   int i = 0;
-  while (isWhitespace(E.row[E.cy].line[i])) {
-    tabs++;
+  while (i < row->size) {
+    if (row->line[i] == ' ')
+      spaces++;
+    else if (row->line[i] == '\t')
+      spaces += TAB_LENGTH;
+    else
+      break;
     i++;
   }
-  for (; i < E.row[E.cy].size; i++) {
-    if (E.row[E.cy].line[i] == '{')
-      tabs += TAB_LENGTH;
-    else if (E.row[E.cy].line[i] == '}')
-      tabs -= TAB_LENGTH;
+  int tabs = spaces / TAB_LENGTH;
+
+  if (E.syntax && row->render && row->rsize > 0) {
+    char *Is = E.syntax->IndentStart;
+    char *Ie = E.syntax->IndentEnd;
+    int IsLen = Is ? strlen(Is) : 0;
+    int IeLen = Ie ? strlen(Ie) : 0;
+
+    if (IsLen > 0) {
+      for (int j = i; j <= row->rsize - IsLen; j++) {
+        if (!strncmp(&row->render[j], Is, IsLen)) {
+          tabs++;
+          break;
+        }
+      }
+    }
+    if (IeLen > 0) {
+      for (int j = i; j <= row->rsize - IeLen; j++) {
+        if (!strncmp(&row->render[j], Ie, IeLen)) {
+          tabs--;
+          break;
+        }
+      }
+    }
   }
-  tabs /= TAB_LENGTH;
-  if (E.cx == 0) {
-    editorInsertRow(E.cy, "", 0);
-  } else {
-    struct erow *row = &E.row[E.cy];
-    editorInsertRow(E.cy + 1, &row->line[E.cx], row->size - E.cx);
-    row = &E.row[E.cy];
-    row->size = E.cx;
-    row->line[row->size] = '\0';
-    updaterow(row);
-  }
+
+  if (tabs < 0)
+    tabs = 0;
+
+  editorInsertRow(E.cy + 1, &row->line[E.cx], row->size - E.cx);
+  row = &E.row[E.cy];
+
+  size_t new_size = E.cx;
+  char *new_line = realloc(row->line, new_size + 1);
+  if (!new_line)
+    kill("realloc");
+  row->line = new_line;
+  row->size = new_size;
+  row->line[row->size] = '\0';
+  updaterow(row);
+
   E.cy++;
   E.cx = 0;
-  while (tabs--) {
+
+  for (int j = 0; j < tabs; j++)
     insertchar('\t');
-  }
 }
 
 void rowinsertstring(struct erow *row, char *s, size_t len) {
@@ -881,8 +1039,16 @@ void editorOpen(char *filename) {
   E.filename = strdup(filename);
   selectHL();
   FILE *fp = fopen(filename, "r");
-  if (!fp)
-    kill("fopen");
+  if (!fp) {
+    fp = fopen(filename, "w");
+    if (!fp)
+      kill("fopen");
+    fclose(fp);
+
+    fp = fopen(filename, "r");
+    if (!fp)
+      kill("fopen");
+  }
 
   char *line = NULL;
   size_t linecap = 0;
@@ -893,6 +1059,8 @@ void editorOpen(char *filename) {
       linelen--;
     editorInsertRow(E.numrows, line, linelen);
   }
+  if (E.numrows == 0)
+    editorInsertRow(0, "", 0);
   E.dirty = false;
   free(line);
   fclose(fp);
@@ -2379,11 +2547,7 @@ void processcommands() {
     E.mode = 'r';
     break;
   case 's':
-    write(STDOUT_FILENO, "\x1b[4 q", 5);
-    int l = readkey();
     rowdeletechar(&E.row[E.cy], E.cx);
-    rowinsertchar(&E.row[E.cy], E.cx, l);
-    E.cx++;
     E.mode = 'i';
     write(STDOUT_FILENO, "\x1b[6 q", 5);
     break;
@@ -2580,8 +2744,10 @@ void processkey() {
 
   case CTRL_KEY('l'):
   case '\x1b':
-    E.mode = 'n';
-    coalesce_state.active = false;
+    if (!DUMB) {
+      E.mode = 'n';
+      coalesce_state.active = false;
+    }
     break;
 
   case MOUSE_EVENT:
@@ -2650,6 +2816,8 @@ void getConfig(char *filename) {
       RELATIVE_LINE_NUMBERS = atoi(value);
     else if (strcmp(key, "UNDO_STACK_SIZE") == 0)
       UNDO_STACK_SIZE = atoi(value);
+    else if (strcmp(key, "DUMB") == 0)
+      DUMB = atoi(value);
   }
   free(line);
   fclose(fp);
@@ -2660,8 +2828,21 @@ int main(int argc, char *argv[]) {
   rawmode();
   geteditor();
   getConfig(".batatarc");
-  if (argc >= 2) {
-    editorOpen(argv[1]);
+  // if (argc >= 2) {
+  //   editorOpen(argv[1]);
+  // }
+  char *filename = NULL;
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "-dumb") == 0) {
+      DUMB = 1;
+      E.mode = 'i';
+    } else if (!filename) {
+      filename = argv[i];
+    }
+  }
+
+  if (filename) {
+    editorOpen(filename);
   }
 
   setstatus("TIP: Ctrl-S to save | Ctrl-Q to quit | Ctrl-F to find");

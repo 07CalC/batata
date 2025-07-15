@@ -907,6 +907,7 @@ void insertchar(int c) {
 void insertnewline() {
   if (E.numrows == 0) {
     editorInsertRow(0, "", 0);
+    updaterow(&E.row[0]);
     E.cy = 0;
     E.cx = 0;
   }
@@ -932,13 +933,16 @@ void insertnewline() {
     updaterow(row);
 
     editorInsertRow(E.cy + 1, afterCursor, strlen(afterCursor));
+    updaterow(&E.row[E.cy + 1]);
     editorInsertRow(E.cy + 1, "", 0);
+    updaterow(&E.row[E.cy + 1]);
 
     free(afterCursor);
 
     E.cy++;
     E.cx = 0;
 
+    row = &E.row[E.cy - 1];
     int spaces = 0, i = 0;
     while (i < row->size) {
       if (row->line[i] == ' ')

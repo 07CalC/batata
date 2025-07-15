@@ -922,6 +922,41 @@ void insertnewline() {
 
   updaterow(row);
 
+  bool beforeOpen = (E.cx > 0 && row->line[E.cx - 1] == '{');
+  bool afterClose = (E.cx < row->size && row->line[E.cx] == '}');
+
+  if (beforeOpen && afterClose) {
+    char *afterCursor = strdup(&row->line[E.cx]);
+    row->line[E.cx] = '\0';
+    row->size = E.cx;
+    updaterow(row);
+
+    editorInsertRow(E.cy + 1, afterCursor, strlen(afterCursor));
+    editorInsertRow(E.cy + 1, "", 0);
+
+    free(afterCursor);
+
+    E.cy++;
+    E.cx = 0;
+
+    int spaces = 0, i = 0;
+    while (i < row->size) {
+      if (row->line[i] == ' ')
+        spaces++;
+      else if (row->line[i] == '\t')
+        spaces += TAB_LENGTH;
+      else
+        break;
+      i++;
+    }
+    int tabs = spaces / TAB_LENGTH + 1;
+
+    for (int j = 0; j < tabs; j++)
+      insertchar('\t');
+
+    return;
+  }
+
   int spaces = 0;
   int i = 0;
   while (i < row->size) {
@@ -2609,13 +2644,13 @@ void processcommands() {
 
   // Scroll down half a page
   case CTRL_KEY('d'):
-    E.cy -= (E.rows - 1) / 2;
+    E.cy += (E.rows - 1) / 2;
     E.cy = MAX(E.cy, 0);
     break;
 
   // Scroll up half a page
   case CTRL_KEY('u'):
-    E.cy += (E.rows - 1) / 2;
+    E.cy -= (E.rows - 1) / 2;
     E.cy = MIN(E.cy, E.numrows);
     break;
 
@@ -2828,12 +2863,9 @@ int main(int argc, char *argv[]) {
   rawmode();
   geteditor();
   getConfig(".batatarc");
-  // if (argc >= 2) {
-  //   editorOpen(argv[1]);
-  // }
   char *filename = NULL;
   for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "-dumb") == 0) {
+    if (strcmp(argv[i], "-dumb") == 0 || strcmp(argv[i], "-d") == 0) {
       DUMB = 1;
       E.mode = 'i';
     } else if (!filename) {

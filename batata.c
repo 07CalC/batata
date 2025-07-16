@@ -32,8 +32,8 @@ int TAB_LENGTH =
     2; // Set to 1 for reltive line numbers 0 for classic in .batatarc
 int RELATIVE_LINE_NUMBERS = 1;
 int UNDO_STACK_SIZE = 100;
-int AUTO_COMPLETION = 1;
-int DUMB = 0; // Only allow insert mode
+int AUTO_COMPLETION = 1; // COmpletes (,{,<,",'
+int DUMB = 0;            // Only allow insert mode
 
 enum keys {
   BACKSPACE = 127,
@@ -125,9 +125,11 @@ struct editor {
   char mode;
   int sel_x;
   int sel_y;
+  bool yankNewline;
 };
 
 struct editor E;
+char *clipboard = NULL;
 
 char *C_EXTENSIONS[] = {".c", ".h", ".cpp", NULL};
 char *C_KEYWORDS[] = {"switch",    "if",      "while",   "for",      "break",
@@ -183,6 +185,15 @@ char *GO_KEYWORDS[] = {
     "go",    "defer",  "struct",  "interface", "type",    "map|",   "chan|",
     "bool|", "int|",   "string|", "float64|",  "error|",  "nil|",   NULL};
 
+char *HS_EXTENSIONS[] = {".hs", ".lhs", NULL};
+char *HS_KEYWORDS[] = {
+    "case",     "class",   "data",     "default", "deriving", "do",      "else",
+    "foreign",  "if", "import",   "in",      "infix",    "infixl",  "infixr",
+    "instance", "let",     "module",   "newtype", "of",       "then",    "type",
+    "where",    "qualified", "as", "hiding",  "IO|", "Int|",    "Float|",
+    "Double|",  "Char|",   "String|",  "Bool|", "True|",    "False|",  "Nothing|",
+    "Just|",    "Maybe|",  "Either|",  "Left|",   "Right|",   NULL};
+
 struct syntax HLDB[] = {
     // C/C++
     {"//", "/*", "*/", "{", "}", "c", C_EXTENSIONS, C_KEYWORDS,
@@ -210,6 +221,9 @@ struct syntax HLDB[] = {
 
     // Go
     {"//", "/*", "*/", "{", "}", "go", GO_EXTENSIONS, GO_KEYWORDS,
+     HL_NUMBERS | HL_STRINGS | HL_SEPARATORS},
+    // Haskell
+    {"--", "{-", "-}", "{", "}", "Haskell", HS_EXTENSIONS, HS_KEYWORDS,
      HL_NUMBERS | HL_STRINGS | HL_SEPARATORS},
 };
 
@@ -395,8 +409,8 @@ int isSepator(int c) {
 int isWhitespace(int c) { return c == ' ' || c == '\t'; }
 
 void updateSyntax(struct erow *row) {
-  row->highlight = realloc(row->highlight, row->size);
-  memset(row->highlight, NORMAL, row->size);
+  row->highlight = realloc(row->highlight, row->rsize);
+  memset(row->highlight, NORMAL, row->rsize);
   if (E.syntax == NULL)
     return;
   char **keys = E.syntax->keywords;
@@ -448,7 +462,7 @@ void updateSyntax(struct erow *row) {
     if (E.syntax->flags & HL_STRINGS) {
       if (inString) {
         row->highlight[i] = STRING;
-        if (c == '\\' && i + 1 < row->size) {
+        if (c == '\\' && i + 1 < row->rsize) {
           row->highlight[i + 1] = STRING;
           i += 2;
           continue;
@@ -881,25 +895,28 @@ void insertchar(int c) {
 
   rowinsertchar(&E.row[E.cy], E.cx, c);
   E.cx++;
+  struct erow *row = &E.row[E.cy];
 
-  switch (c) {
-  case '(':
-    rowinsertchar(&E.row[E.cy], E.cx, ')');
-    break;
-  case '[':
-    rowinsertchar(&E.row[E.cy], E.cx, ']');
-    break;
-  case '{':
-    rowinsertchar(&E.row[E.cy], E.cx, '}');
-    break;
-  case '"':
-    rowinsertchar(&E.row[E.cy], E.cx, '"');
-    break;
-  case '\'':
-    rowinsertchar(&E.row[E.cy], E.cx, '\'');
-    break;
-  default:
-    return;
+  if (AUTO_COMPLETION) {
+    switch (c) {
+    case '(':
+      rowinsertchar(row, E.cx, ')');
+      break;
+    case '[':
+      rowinsertchar(row, E.cx, ']');
+      break;
+    case '{':
+      rowinsertchar(row, E.cx, '}');
+      break;
+    case '"':
+      rowinsertchar(row, E.cx, '"');
+      break;
+    case '\'':
+      rowinsertchar(row, E.cx, '\'');
+      break;
+    default:
+      return;
+    }
   }
   // E.cx--;
 }
@@ -1893,6 +1910,13 @@ void processmotion(int key) {
           int y = E.cy;
           while (y >= 0) {
             while (x >= 0) {
+                if (E.row[y].highlight && 
+                        (E.row[y].highlight[x] == STRING || 
+                         E.row[y].highlight[x] == COMMENT ||
+                         E.row[y].highlight[x] == MULTICOMMENT)) {
+                        x--;
+                        continue;
+                    }
               char c = E.row[y].line[x];
               if (c == currentChar) {
                 depth++;
@@ -1937,7 +1961,118 @@ void processmotion(int key) {
   }
 }
 
+void yankSelection() {
+    if (clipboard) {
+        free(clipboard);
+        clipboard = NULL;
+    }
+    
+    int totalSize = 0;
+    int startY = MIN(E.sel_y, E.cy);
+    int endY = MAX(E.sel_y, E.cy);
+    int startX = (E.sel_y < E.cy) ? E.sel_x : E.cx;
+    int endX = (E.sel_y < E.cy) ? E.cx : E.sel_x;
+    if (startY == endY) {
+        int start = MIN(startX, endX);
+        int end = MAX(startX, endX);
+        totalSize = end - start + 1;
+        
+        if (E.yankNewline) {  
+            totalSize++; 
+        }
+    } else {
+        // Multi-line 
+        for (int i = startY; i <= endY; i++) {
+            struct erow *row = &E.row[i];
+            if (i == startY) {
+                totalSize += row->size - startX;
+            } else if (i == endY) {
+                totalSize += endX + 1;
+            } else {
+                totalSize += row->size;
+            }
+            totalSize++; 
+        }
+    }
+    if (totalSize == 0) return;
+    clipboard = malloc(totalSize + 1);
+    if (!clipboard) return;
+    int pos = 0;
+    if (startY == endY) {
+        // Single line
+        int start = MIN(startX, endX);
+        int end = MAX(startX, endX);
+        struct erow *row = &E.row[startY];
+        
+        for (int j = start; j <= end; j++) {
+            if (j < row->size) {
+                clipboard[pos++] = row->line[j];
+            }
+        }
+        
+        if (E.yankNewline) {
+            clipboard[pos++] = '\n';
+        }
+    } else {
+        // Multi-line
+        for (int i = startY; i <= endY; i++) {
+            struct erow *row = &E.row[i];
+            
+            if (i == startY) {
+                for (int j = startX; j < row->size; j++) {
+                    clipboard[pos++] = row->line[j];
+                }
+            } else if (i == endY) {
+                for (int j = 0; j <= endX && j < row->size; j++) {
+                    clipboard[pos++] = row->line[j];
+                }
+            } else {
+                for (int j = 0; j < row->size; j++) {
+                    clipboard[pos++] = row->line[j];
+                }
+            }
+            
+            clipboard[pos++] = '\n';
+        }
+    }
+    
+    clipboard[pos] = '\0';
+    E.yankNewline = false; 
+}
+
+void pasteClipboard() {
+    if (!clipboard) return;
+    
+    char *clipboardCopy = strdup(clipboard);
+    if (!clipboardCopy) return;
+    
+    char *saveptr;
+    char *line = strtok_r(clipboardCopy, "\n", &saveptr);
+    bool firstLine = true;
+    
+    while (line) {
+        if (!firstLine) {
+            insertnewline();
+        }
+        
+        for (int i = 0; line[i]; i++) {
+            insertchar(line[i]);
+        }
+        
+        firstLine = false;
+        line = strtok_r(NULL, "\n", &saveptr);
+    }
+    
+    // If clipboard ends with newline, add final newline
+    if (clipboard[strlen(clipboard) - 1] == '\n') {
+        insertnewline();
+    }
+    
+    free(clipboardCopy);
+}
+
 void deleteSelection() {
+  yankSelection();
   for (int i = MIN(E.sel_y, E.cy); i <= MAX(E.cy, E.sel_y); i++)
     pushUndo(EDITDELETE, i, -1);
 
@@ -1954,7 +2089,7 @@ void deleteSelection() {
     if (row->size == 0)
       editorDelRow(i);
   }
-  E.cx = E.sel_y;
+  E.cy = MIN(E.cy, E.sel_y );
   E.cx = E.sel_x;
   E.mode = 'n';
 }
@@ -2102,10 +2237,17 @@ void processSelection() {
   case CTRL_KEY('z'):
     applyUndo();
     break;
-  case CTRL_KEY('y'):
+  case CTRL_KEY('r'):
     applyRedo();
     break;
     return;
+
+  case CTRL_KEY('c'):
+  case 'y':
+  yankSelection();
+  E.mode = 'n';
+  break;
+
 
   case '\x1b':
     E.mode = 'n';
@@ -2131,7 +2273,7 @@ void processSelection() {
     case 'W':
     case 'w': {
       int (*fptr)(int) = ((k == 'w') ? &isSepator : &isWhitespace);
-      if (fptr(E.row[E.cx].line[E.cx])) {
+      if (fptr(E.row[E.cy].line[E.cx])) {
         return;
       } else {
         while (!fptr(E.row[E.sel_y].line[E.sel_x]))
@@ -2278,7 +2420,7 @@ void NormalDelete(char lmao) {
       }
 
       while (1) {
-        if (!(E.cy < E.numrows && E.cy >= 0 && E.cx < E.row[E.cx].size &&
+        if (!(E.cy < E.numrows && E.cy >= 0 && E.cx < E.row[E.cy].size &&
               E.cx >= 0))
           break;
         if (!fptr(E.row[E.cy].line[E.cx])) {
@@ -2377,7 +2519,201 @@ void NormalDelete(char lmao) {
         deletechar();
       }
     }
+      break;
   }
+  default:
+    E.sel_x = E.cx;
+    E.sel_y = E.cy;
+    for(int i = 0; i < count; i++)
+      processmotion(c);
+    deleteSelection();
+    break;
+  }
+}
+
+void NormalYank(char lmao) {
+  int c;
+  if (lmao != '\0')
+    c = lmao;
+  else
+    c = readkey();
+  int count = 1;
+  int motion = c;
+  if (isdigit(c) && c != '0') {
+    count = c - '0';
+    while (1) {
+      int k = readkey();
+      if (isdigit(k)) {
+        count = count * 10 + (k - '0');
+      } else {
+        motion = k;
+        break;
+      }
+    }
+  }
+  switch (motion) {
+  case 'y':{
+    int tempx = E.cx;
+    E.sel_y = E.cy;
+    E.sel_x = 0;
+    E.cx = E.row[E.cy].size - 1;
+    E.yankNewline = true;
+    yankSelection();
+    E.cx = tempx;
+    break;
+    }
+  case '0': {
+    E.sel_y = E.cy;
+    E.sel_x = 0;
+    yankSelection();
+    break;
+  }
+  case '$': {
+    E.sel_y = E.cy;
+    E.sel_x = E.row[E.cy].size - 1;
+    yankSelection();
+    break;
+  }
+  case 'h':
+  case 'l':
+    E.sel_y = E.cy;
+    E.sel_x = E.cx;
+    for (int i = 0; i < count; i++)
+      movecursor(motion);
+    yankSelection();
+    break;
+  case 'j':
+    E.sel_x = 0;
+    E.sel_y = E.cy;
+    for(int i = 0; i < count; i++) {
+        movecursor(ARROW_DOWN);
+      }
+    E.cx = E.row[E.cy].size - 1;
+    E.yankNewline = true;
+    yankSelection();
+    break;
+  case 'k':
+    E.sel_x = E.row[E.cy].size - 1;
+    E.sel_y = E.cy;
+    for(int i = 0; i < count; i++) movecursor(ARROW_UP);
+    E.cx = 0;
+    E.yankNewline = true;
+    yankSelection();
+    break;
+
+  case 'W':
+  case 'w': {
+      int (*fptr)(int) = ((motion == 'w') ? &isSepator : &isWhitespace);
+     if (fptr(E.row[E.cy].line[E.cx])) {
+        return;
+      } else {
+        while (!fptr(E.row[E.sel_y].line[E.sel_x]))
+          E.sel_x--;
+        if (fptr(E.row[E.sel_y].line[E.sel_x]))
+          E.sel_x++;
+        while (!fptr(E.row[E.cy].line[E.cx]))
+          E.cx++;
+        if (fptr(E.row[E.cy].line[E.cx]))
+          E.cx--;
+      }
+      yankSelection();
+      break;
+    }
+
+  case 'i': {
+    int k = readkey();
+    switch (k) {
+    case 'W':
+    case 'w': {
+      E.sel_x = E.cx;
+      E.sel_y = E.cy;
+      int (*fptr)(int) = ((k == 'w') ? &isSepator : &isWhitespace);
+      if (fptr(E.row[E.cy].line[E.cx])) {
+        return;
+      } else {
+        while (!fptr(E.row[E.sel_y].line[E.sel_x]))
+          E.sel_x--;
+        if (fptr(E.row[E.sel_y].line[E.sel_x]))
+          E.sel_x++;
+        while (!fptr(E.row[E.cy].line[E.cx]))
+          E.cx++;
+        if (fptr(E.row[E.cy].line[E.cx]))
+          E.cx--;
+      }
+      yankSelection();
+      break;
+    }
+    case '{':
+    case '[':
+    case '<':
+    case '(': {
+      int x = E.cx, y = E.cy;
+
+      if (insideParens(k, x, y)) {
+        int open_x, open_y, close_x, close_y;
+        if (!openParen(k, x, y, &open_x, &open_y))
+          return;
+        if (!matchingParen(k, open_x, open_y, &close_x, &close_y))
+          return;
+        E.sel_x = open_x + 1;
+        E.sel_y = open_y;
+        E.cx = close_x - 1;
+        E.cy = close_y;
+        yankSelection();
+        E.cx = E.sel_x;
+        E.cy = E.sel_y;
+        return;
+      }
+
+      int len = strlen(E.row[y].line);
+      for (int i = x; i < len; i++) {
+        if (E.row[y].line[i] == k) {
+          int close_x, close_y;
+          if (!matchingParen(k, i, y, &close_x, &close_y))
+            return;
+          E.sel_x = i + 1;
+          E.sel_y = y;
+          E.cx = close_x - 1;
+          E.cy = close_y;
+          yankSelection();
+          E.cx = E.sel_x;
+          E.cy = E.sel_y;
+          return;
+        }
+      }
+      break;
+    }
+    }
+    break;
+  }
+  case 't': {
+    int k = readkey();
+    int found = -1;
+    for (int i = E.cx; i < E.row[E.cy].size; i++) {
+      if (E.row[E.cy].line[i] == k) {
+        found = i;
+        break;
+      }
+    }
+    if (found + 1) {
+      E.sel_x = E.cx;
+      E.sel_y = E.cy;
+      for (int i = E.cx; i < found; i++) {
+        movecursor(ARROW_RIGHT);
+      }
+      movecursor(ARROW_LEFT);
+      yankSelection();
+    }
+      break;
+  }
+  default:
+      E.sel_x = E.cx;
+      E.sel_y = E.cy;
+      for(int i = 0; i < count; i++)
+      processmotion(c);
+      yankSelection();
+    break;
+
   }
 }
 
@@ -2529,6 +2865,13 @@ void processcommands() {
     E.mode = 'i';
     break;
   }
+  
+  case 'y':
+    NormalYank('\0');
+    break;
+  case 'p':
+    pasteClipboard();
+    break;
 
   case 'i':
     E.mode = 'i';
@@ -2742,6 +3085,14 @@ void processkey() {
     applyRedo();
     break;
 
+  case CTRL_KEY('c'):
+    yankSelection();
+    break;
+
+  case CTRL_KEY('v'):
+    pasteClipboard();
+    break;
+
   case PG_UP:
   case PG_DN: {
     if (c == PG_UP)
@@ -2819,6 +3170,7 @@ void geteditor() {
   E.mode = 'n';
   E.sel_x = 0;
   E.sel_y = 0;
+  E.yankNewline = false;
   if (windowsize(&E.rows, &E.cols) == -1)
     kill("GetWindowSize");
   E.rows -= 2;
@@ -2855,8 +3207,12 @@ void getConfig(char *filename) {
       RELATIVE_LINE_NUMBERS = atoi(value);
     else if (strcmp(key, "UNDO_STACK_SIZE") == 0)
       UNDO_STACK_SIZE = atoi(value);
-    else if (strcmp(key, "DUMB") == 0)
-      DUMB = atoi(value);
+    else if (strcmp(key, "DUMB") == 0){
+      DUMB = (atoi(value) == 0 ? 0 : 1);
+      if(DUMB == 1) E.mode = 'i';
+    }
+    else if (strcmp(key, "AUTO_COMPLETION") == 0)
+      AUTO_COMPLETION = atoi(value);
   }
   free(line);
   fclose(fp);

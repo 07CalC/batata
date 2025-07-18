@@ -1,3 +1,13 @@
+/*
+ * Batata Text Editor - A minimal text editor for Linux
+ * Based on the original Kilo by Salvatore Sanfilippo (antirez)
+ *
+ * Copyright (C) 2025 Aryan Pandey <ether9095cable@gmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the MIT License. See the LICENSE file for details.
+ */
+
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
 #define _GNU_SOURCE
@@ -24,8 +34,8 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
-// Now with undo
-#define editor_version "0.0.3"
+// Probably the only version for a long time
+#define editor_version "1.0.0"
 
 // Defaults to be ovverwritten by .batatarc
 int TAB_LENGTH =
@@ -187,12 +197,13 @@ char *GO_KEYWORDS[] = {
 
 char *HS_EXTENSIONS[] = {".hs", ".lhs", NULL};
 char *HS_KEYWORDS[] = {
-    "case",     "class",   "data",     "default", "deriving", "do",      "else",
-    "foreign",  "if", "import",   "in",      "infix",    "infixl",  "infixr",
-    "instance", "let",     "module",   "newtype", "of",       "then",    "type",
-    "where",    "qualified", "as", "hiding",  "IO|", "Int|",    "Float|",
-    "Double|",  "Char|",   "String|",  "Bool|", "True|",    "False|",  "Nothing|",
-    "Just|",    "Maybe|",  "Either|",  "Left|",   "Right|",   NULL};
+    "case",    "class",   "data",     "default", "deriving",  "do",
+    "else",    "foreign", "if",       "import",  "in",        "infix",
+    "infixl",  "infixr",  "instance", "let",     "module",    "newtype",
+    "of",      "then",    "type",     "where",   "qualified", "as",
+    "hiding",  "IO|",     "Int|",     "Float|",  "Double|",   "Char|",
+    "String|", "Bool|",   "True|",    "False|",  "Nothing|",  "Just|",
+    "Maybe|",  "Either|", "Left|",    "Right|",  NULL};
 
 struct syntax HLDB[] = {
     // C/C++
@@ -243,6 +254,9 @@ void kill(const char *s) {
 }
 
 void disable_raw() {
+  // diable mouse
+  write(STDOUT_FILENO, "\x1b[?10001", 8);
+  write(STDOUT_FILENO, "\x1b[?10061", 8);
   if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.og) == -1) {
     kill("tcsetattr");
   }
@@ -1910,13 +1924,13 @@ void processmotion(int key) {
           int y = E.cy;
           while (y >= 0) {
             while (x >= 0) {
-                if (E.row[y].highlight && 
-                        (E.row[y].highlight[x] == STRING || 
-                         E.row[y].highlight[x] == COMMENT ||
-                         E.row[y].highlight[x] == MULTICOMMENT)) {
-                        x--;
-                        continue;
-                    }
+              if (E.row[y].highlight &&
+                  (E.row[y].highlight[x] == STRING ||
+                   E.row[y].highlight[x] == COMMENT ||
+                   E.row[y].highlight[x] == MULTICOMMENT)) {
+                x--;
+                continue;
+              }
               char c = E.row[y].line[x];
               if (c == currentChar) {
                 depth++;
@@ -1962,113 +1976,117 @@ void processmotion(int key) {
 }
 
 void yankSelection() {
-    if (clipboard) {
-        free(clipboard);
-        clipboard = NULL;
+  if (clipboard) {
+    free(clipboard);
+    clipboard = NULL;
+  }
+
+  int totalSize = 0;
+  int startY = MIN(E.sel_y, E.cy);
+  int endY = MAX(E.sel_y, E.cy);
+  int startX = (E.sel_y < E.cy) ? E.sel_x : E.cx;
+  int endX = (E.sel_y < E.cy) ? E.cx : E.sel_x;
+  if (startY == endY) {
+    int start = MIN(startX, endX);
+    int end = MAX(startX, endX);
+    totalSize = end - start + 1;
+
+    if (E.yankNewline) {
+      totalSize++;
     }
-    
-    int totalSize = 0;
-    int startY = MIN(E.sel_y, E.cy);
-    int endY = MAX(E.sel_y, E.cy);
-    int startX = (E.sel_y < E.cy) ? E.sel_x : E.cx;
-    int endX = (E.sel_y < E.cy) ? E.cx : E.sel_x;
-    if (startY == endY) {
-        int start = MIN(startX, endX);
-        int end = MAX(startX, endX);
-        totalSize = end - start + 1;
-        
-        if (E.yankNewline) {  
-            totalSize++; 
-        }
-    } else {
-        // Multi-line 
-        for (int i = startY; i <= endY; i++) {
-            struct erow *row = &E.row[i];
-            if (i == startY) {
-                totalSize += row->size - startX;
-            } else if (i == endY) {
-                totalSize += endX + 1;
-            } else {
-                totalSize += row->size;
-            }
-            totalSize++; 
-        }
+  } else {
+    // Multi-line
+    for (int i = startY; i <= endY; i++) {
+      struct erow *row = &E.row[i];
+      if (i == startY) {
+        totalSize += row->size - startX;
+      } else if (i == endY) {
+        totalSize += endX + 1;
+      } else {
+        totalSize += row->size;
+      }
+      totalSize++;
     }
-    if (totalSize == 0) return;
-    clipboard = malloc(totalSize + 1);
-    if (!clipboard) return;
-    int pos = 0;
-    if (startY == endY) {
-        // Single line
-        int start = MIN(startX, endX);
-        int end = MAX(startX, endX);
-        struct erow *row = &E.row[startY];
-        
-        for (int j = start; j <= end; j++) {
-            if (j < row->size) {
-                clipboard[pos++] = row->line[j];
-            }
-        }
-        
-        if (E.yankNewline) {
-            clipboard[pos++] = '\n';
-        }
-    } else {
-        // Multi-line
-        for (int i = startY; i <= endY; i++) {
-            struct erow *row = &E.row[i];
-            
-            if (i == startY) {
-                for (int j = startX; j < row->size; j++) {
-                    clipboard[pos++] = row->line[j];
-                }
-            } else if (i == endY) {
-                for (int j = 0; j <= endX && j < row->size; j++) {
-                    clipboard[pos++] = row->line[j];
-                }
-            } else {
-                for (int j = 0; j < row->size; j++) {
-                    clipboard[pos++] = row->line[j];
-                }
-            }
-            
-            clipboard[pos++] = '\n';
-        }
+  }
+  if (totalSize == 0)
+    return;
+  clipboard = malloc(totalSize + 1);
+  if (!clipboard)
+    return;
+  int pos = 0;
+  if (startY == endY) {
+    // Single line
+    int start = MIN(startX, endX);
+    int end = MAX(startX, endX);
+    struct erow *row = &E.row[startY];
+
+    for (int j = start; j <= end; j++) {
+      if (j < row->size) {
+        clipboard[pos++] = row->line[j];
+      }
     }
-    
-    clipboard[pos] = '\0';
-    E.yankNewline = false; 
+
+    if (E.yankNewline) {
+      clipboard[pos++] = '\n';
+    }
+  } else {
+    // Multi-line
+    for (int i = startY; i <= endY; i++) {
+      struct erow *row = &E.row[i];
+
+      if (i == startY) {
+        for (int j = startX; j < row->size; j++) {
+          clipboard[pos++] = row->line[j];
+        }
+      } else if (i == endY) {
+        for (int j = 0; j <= endX && j < row->size; j++) {
+          clipboard[pos++] = row->line[j];
+        }
+      } else {
+        for (int j = 0; j < row->size; j++) {
+          clipboard[pos++] = row->line[j];
+        }
+      }
+
+      clipboard[pos++] = '\n';
+    }
+  }
+
+  clipboard[pos] = '\0';
+  E.yankNewline = false;
 }
 
 void pasteClipboard() {
-    if (!clipboard) return;
-    
-    char *clipboardCopy = strdup(clipboard);
-    if (!clipboardCopy) return;
-    
-    char *saveptr;
-    char *line = strtok_r(clipboardCopy, "\n", &saveptr);
-    bool firstLine = true;
-    
-    while (line) {
-        if (!firstLine) {
-            insertnewline();
-        }
-        
-        for (int i = 0; line[i]; i++) {
-            insertchar(line[i]);
-        }
-        
-        firstLine = false;
-        line = strtok_r(NULL, "\n", &saveptr);
+  if (!clipboard)
+    return;
+
+  char *clipboardCopy = strdup(clipboard);
+  if (!clipboardCopy)
+    return;
+
+  char *saveptr;
+  char *line = strtok_r(clipboardCopy, "\n", &saveptr);
+  bool firstLine = true;
+
+  while (line) {
+    if (!firstLine) {
+      insertnewline();
     }
-    
-    // If clipboard ends with newline, add final newline
-    if (clipboard[strlen(clipboard) - 1] == '\n') {
-        insertnewline();
+
+    for (int i = 0; line[i]; i++) {
+      insertchar(line[i]);
     }
-    
-    free(clipboardCopy);
+
+    firstLine = false;
+    line = strtok_r(NULL, "\n", &saveptr);
+  }
+
+  // If clipboard ends with newline, add final newline
+  if (clipboard[strlen(clipboard) - 1] == '\n') {
+    insertnewline();
+  }
+
+  free(clipboardCopy);
 }
 
 void deleteSelection() {
@@ -2089,7 +2107,7 @@ void deleteSelection() {
     if (row->size == 0)
       editorDelRow(i);
   }
-  E.cy = MIN(E.cy, E.sel_y );
+  E.cy = MIN(E.cy, E.sel_y);
   E.cx = E.sel_x;
   E.mode = 'n';
 }
@@ -2244,10 +2262,9 @@ void processSelection() {
 
   case CTRL_KEY('c'):
   case 'y':
-  yankSelection();
-  E.mode = 'n';
-  break;
-
+    yankSelection();
+    E.mode = 'n';
+    break;
 
   case '\x1b':
     E.mode = 'n';
@@ -2519,12 +2536,12 @@ void NormalDelete(char lmao) {
         deletechar();
       }
     }
-      break;
+    break;
   }
   default:
     E.sel_x = E.cx;
     E.sel_y = E.cy;
-    for(int i = 0; i < count; i++)
+    for (int i = 0; i < count; i++)
       processmotion(c);
     deleteSelection();
     break;
@@ -2552,7 +2569,7 @@ void NormalYank(char lmao) {
     }
   }
   switch (motion) {
-  case 'y':{
+  case 'y': {
     int tempx = E.cx;
     E.sel_y = E.cy;
     E.sel_x = 0;
@@ -2561,7 +2578,7 @@ void NormalYank(char lmao) {
     yankSelection();
     E.cx = tempx;
     break;
-    }
+  }
   case '0': {
     E.sel_y = E.cy;
     E.sel_x = 0;
@@ -2585,9 +2602,9 @@ void NormalYank(char lmao) {
   case 'j':
     E.sel_x = 0;
     E.sel_y = E.cy;
-    for(int i = 0; i < count; i++) {
-        movecursor(ARROW_DOWN);
-      }
+    for (int i = 0; i < count; i++) {
+      movecursor(ARROW_DOWN);
+    }
     E.cx = E.row[E.cy].size - 1;
     E.yankNewline = true;
     yankSelection();
@@ -2595,7 +2612,8 @@ void NormalYank(char lmao) {
   case 'k':
     E.sel_x = E.row[E.cy].size - 1;
     E.sel_y = E.cy;
-    for(int i = 0; i < count; i++) movecursor(ARROW_UP);
+    for (int i = 0; i < count; i++)
+      movecursor(ARROW_UP);
     E.cx = 0;
     E.yankNewline = true;
     yankSelection();
@@ -2603,22 +2621,22 @@ void NormalYank(char lmao) {
 
   case 'W':
   case 'w': {
-      int (*fptr)(int) = ((motion == 'w') ? &isSepator : &isWhitespace);
-     if (fptr(E.row[E.cy].line[E.cx])) {
-        return;
-      } else {
-        while (!fptr(E.row[E.sel_y].line[E.sel_x]))
-          E.sel_x--;
-        if (fptr(E.row[E.sel_y].line[E.sel_x]))
-          E.sel_x++;
-        while (!fptr(E.row[E.cy].line[E.cx]))
-          E.cx++;
-        if (fptr(E.row[E.cy].line[E.cx]))
-          E.cx--;
-      }
-      yankSelection();
-      break;
+    int (*fptr)(int) = ((motion == 'w') ? &isSepator : &isWhitespace);
+    if (fptr(E.row[E.cy].line[E.cx])) {
+      return;
+    } else {
+      while (!fptr(E.row[E.sel_y].line[E.sel_x]))
+        E.sel_x--;
+      if (fptr(E.row[E.sel_y].line[E.sel_x]))
+        E.sel_x++;
+      while (!fptr(E.row[E.cy].line[E.cx]))
+        E.cx++;
+      if (fptr(E.row[E.cy].line[E.cx]))
+        E.cx--;
     }
+    yankSelection();
+    break;
+  }
 
   case 'i': {
     int k = readkey();
@@ -2704,16 +2722,15 @@ void NormalYank(char lmao) {
       movecursor(ARROW_LEFT);
       yankSelection();
     }
-      break;
+    break;
   }
   default:
-      E.sel_x = E.cx;
-      E.sel_y = E.cy;
-      for(int i = 0; i < count; i++)
+    E.sel_x = E.cx;
+    E.sel_y = E.cy;
+    for (int i = 0; i < count; i++)
       processmotion(c);
-      yankSelection();
+    yankSelection();
     break;
-
   }
 }
 
@@ -2865,7 +2882,7 @@ void processcommands() {
     E.mode = 'i';
     break;
   }
-  
+
   case 'y':
     NormalYank('\0');
     break;
@@ -3207,11 +3224,11 @@ void getConfig(char *filename) {
       RELATIVE_LINE_NUMBERS = atoi(value);
     else if (strcmp(key, "UNDO_STACK_SIZE") == 0)
       UNDO_STACK_SIZE = atoi(value);
-    else if (strcmp(key, "DUMB") == 0){
+    else if (strcmp(key, "DUMB") == 0) {
       DUMB = (atoi(value) == 0 ? 0 : 1);
-      if(DUMB == 1) E.mode = 'i';
-    }
-    else if (strcmp(key, "AUTO_COMPLETION") == 0)
+      if (DUMB == 1)
+        E.mode = 'i';
+    } else if (strcmp(key, "AUTO_COMPLETION") == 0)
       AUTO_COMPLETION = atoi(value);
   }
   free(line);
@@ -3222,7 +3239,11 @@ int main(int argc, char *argv[]) {
   enableMouse();
   rawmode();
   geteditor();
-  getConfig(".batatarc");
+  char configPath[128];
+  snprintf(configPath, sizeof(configPath), "%s/.config/batata/.batatarc",
+           getenv("HOME"));
+  if (getenv("HOME") != NULL)
+    getConfig(configPath);
   char *filename = NULL;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-dumb") == 0 || strcmp(argv[i], "-d") == 0) {

@@ -941,6 +941,7 @@ void insertnewline() {
     updaterow(&E.row[0]);
     E.cy = 0;
     E.cx = 0;
+    return;
   }
   if (E.cy < 0 || E.cy >= E.numrows)
     return;
@@ -1834,7 +1835,6 @@ void processmotion(int key) {
       }
       if (found + 1)
         E.cx = found;
-
       break;
     }
     case 'F': {
@@ -2909,6 +2909,11 @@ void processcommands() {
     E.mode = 'i';
     break;
   case 'o':
+    if (E.numrows == 0) {
+      insertnewline();
+      E.mode = 'i';
+      break;
+    }
     E.cx = E.row[E.cy].size - 1;
     movecursor(ARROW_RIGHT);
     clearscreen();
@@ -2916,6 +2921,11 @@ void processcommands() {
     insertnewline();
     break;
   case 'O':
+    if (E.numrows == 0) {
+      insertnewline();
+      E.mode = 'i';
+      break;
+    }
     movecursor(ARROW_LEFT);
     E.cx = E.row[E.cy].size - 1;
     movecursor(ARROW_RIGHT);

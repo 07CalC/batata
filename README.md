@@ -1,4 +1,4 @@
-# 🥔 Batata Editor
+# 🥔 Batata
 
 A lightweight, Vi-inspired terminal text editor written in C (~3300 lines). Batata combines the power of modal editing with modern features like syntax highlighting, mouse support, and intuitive key bindings.
 
